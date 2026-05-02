@@ -1,9 +1,13 @@
-# Dual-environment TBD example: release workflow
+# Dual-environment TBD release workflow
 # Copy to: .github/workflows/release.yaml in your application repo
 #
-# Triggered on push to main. Runs python-semantic-release to calculate the next
-# version from conventional commits and creates a GitHub Release. That release
-# event triggers deploy-caller.yaml.
+# Environment model:   dev  →  prod
+# Version tag model:   v1.2.3-dev.1  →  v1.2.3
+# Image tag model:     pr-<N>  →  v1.2.3-dev.1  →  v1.2.3
+#
+# Triggers:
+#   push to main                → dev release   (automated, every merge)
+#   workflow_dispatch: prod     → stable release (gated)
 
 name: Release
 
@@ -15,11 +19,23 @@ on:
       - '.gitignore'
       - 'LICENSE'
       - 'CHANGELOG.md'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Promote to environment'
+        required: true
+        type: choice
+        options:
+          - prod
 
 jobs:
   release:
     uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@main
     with:
-      python_version: '3.11'
-      working_directory: '.'
+      versioning-tool: semantic-release-python
+      environment: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
+      environments: '["dev", "prod"]'
+      prerelease-identifiers: '{"dev": "dev"}'
+      images: '[{"name": "my-app", "bake_target": "default"}]'
+      bake_file: docker-bake.hcl
     secrets: inherit

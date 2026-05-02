@@ -3,6 +3,7 @@
 #
 # Environment model:   dev  →  tst  →  acc  →  prd
 # Version tag model:   v1.2.3-dev.1  →  v1.2.3-alpha.1  →  v1.2.3-beta.1  →  v1.2.3
+# Image tag model:     pr-<N>  →  v1.2.3-dev.1  →  v1.2.3-alpha.1  →  v1.2.3-beta.1  →  v1.2.3
 
 name: Release
 
@@ -33,4 +34,8 @@ jobs:
       environment: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
       environments: '["dev", "tst", "acc", "prd"]'
       prerelease-identifiers: '{"dev": "dev", "tst": "alpha", "acc": "beta"}'
+
+      # Single-image example. For multi-image see tri-env/release-caller.yaml.
+      images: '[{"name": "my-app", "bake_target": "default"}]'
+      bake_file: docker-bake.hcl
     secrets: inherit

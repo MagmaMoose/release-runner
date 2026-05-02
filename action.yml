@@ -26,13 +26,39 @@ inputs:
     required: false
     default: 'semantic-release-python'
 
+  # ── Deployment model ─────────────────────────────────────────────────────
+  deployment-model:
+    description: |
+      Controls how the target environment is determined.
+        tbd           (default) Trunk-Based Development. Pass `environment`
+                      explicitly (or derive it from workflow_dispatch inputs).
+                      One branch (main/trunk) — environment is the promotion target.
+        branch-based  Branch-per-environment (GitFlow-esque). The environment is
+                      inferred from the current branch using `branch-map`.
+                      Do not pass `environment` — it is resolved automatically.
+    required: false
+    default: 'tbd'
+
+  branch-map:
+    description: |
+      JSON object mapping branch names to environment names.
+      Only used when deployment-model is branch-based.
+      Branch names are exact matches against GITHUB_REF_NAME.
+      Example: {"dev": "dev", "staging": "staging", "main": "prod"}
+      The environment names must match entries in the `environments` array.
+    required: false
+    default: ''
+
   # ── Environment model ────────────────────────────────────────────────────
   environment:
     description: |
       The target environment for this run.
       Must be one of the values in `environments`.
       The LAST value in `environments` is always the production (stable) env.
-    required: true
+      Required when deployment-model is tbd.
+      Omit when deployment-model is branch-based (auto-detected from branch-map).
+    required: false
+    default: ''
 
   environments:
     description: |
@@ -183,13 +209,42 @@ runs:
       run: |
         set -euo pipefail
 
+        DEPLOY_MODEL="${{ inputs.deployment-model }}"
+        BRANCH_MAP='${{ inputs.branch-map }}'
         ENV="${{ inputs.environment }}"
         ENVS='${{ inputs.environments }}'
         IDS='${{ inputs.prerelease-identifiers }}'
 
+        echo "Deployment model: ${DEPLOY_MODEL}"
+        echo "Environments:     ${ENVS}"
+        echo "Identifiers:      ${IDS}"
+
+        # ── Branch-based: infer environment from current branch ─────────────
+        if [ "${DEPLOY_MODEL}" == "branch-based" ]; then
+          if [ -z "${BRANCH_MAP}" ] || [ "${BRANCH_MAP}" == '{}' ] || [ "${BRANCH_MAP}" == 'null' ]; then
+            echo "::error::deployment-model is 'branch-based' but branch-map is empty."
+            echo "::error::Set branch-map to a JSON object like: {\"dev\": \"dev\", \"main\": \"prod\"}"
+            exit 1
+          fi
+          BRANCH="${GITHUB_REF_NAME}"
+          echo "Branch-based mode: current branch is '${BRANCH}'"
+          DETECTED_ENV=$(echo "${BRANCH_MAP}" | jq -r --arg b "${BRANCH}" '.[$b] // empty')
+          if [ -z "${DETECTED_ENV}" ]; then
+            echo "::error::Branch '${BRANCH}' has no mapping in branch-map: ${BRANCH_MAP}"
+            echo "::error::Add an entry for this branch or switch to deployment-model: tbd"
+            exit 1
+          fi
+          ENV="${DETECTED_ENV}"
+          echo "Resolved environment '${ENV}' from branch '${BRANCH}'"
+        fi
+
+        # ── Validate that ENV is set ────────────────────────────────────────
+        if [ -z "${ENV}" ]; then
+          echo "::error::'environment' is required when deployment-model is 'tbd'."
+          exit 1
+        fi
+
         echo "Environment:  ${ENV}"
-        echo "Environments: ${ENVS}"
-        echo "Identifiers:  ${IDS}"
 
         # Validate env is in the environments array
         if ! echo "${ENVS}" | jq -e --arg env "${ENV}" 'index($env) != null' > /dev/null; then

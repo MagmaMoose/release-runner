@@ -1,12 +1,8 @@
-# Dual-environment TBD example: dev/tst → prod
-#
+# Dual-environment TBD example: CI workflow
 # Copy to: .github/workflows/ci.yaml in your application repo
-# Environments: dev+tst (automated on every merge to main), prod (gated via GitHub Release)
 #
-# Required secrets in your repo:
-#   SEMANTIC_RELEASE_APP_ID           — GitHub App ID (see README for setup)
-#   SEMANTIC_RELEASE_APP_PRIVATE_KEY  — GitHub App private key
-#   GCP_CREDENTIALS_PROD              — GCP service account JSON for production
+# Triggers on every PR targeting main.
+# Builds the image tagged pr-<N> and pushes to GHCR.
 
 name: CI
 
@@ -20,8 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Add your app-specific test job(s) here, then make build jobs depend on them.
-  # Example (uncomment and customise):
+  # ── Add your test job(s) here ─────────────────────────────────────────────
   # test:
   #   name: Tests
   #   runs-on: ubuntu-latest
@@ -30,11 +25,11 @@ jobs:
   #     - run: make test
 
   build:
-    name: Build Image
-    # needs: test  # uncomment once you add a test job
+    name: Build image
+    # needs: test
     uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@main
     with:
-      image_name: my-app           # → ghcr.io/your-org/my-app:pr-<N>
+      image_name: my-app             # → ghcr.io/your-org/my-app:pr-<N>
       bake_file: docker-bake.hcl
       bake_target: default
       platforms: linux/amd64

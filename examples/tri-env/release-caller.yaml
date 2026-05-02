@@ -3,11 +3,16 @@
 #
 # Environment model:   dev  →  staging  →  prod
 # Version tag model:   v1.2.3-dev.1  →  v1.2.3-rc.1  →  v1.2.3
+# Image tag model:     pr-<N>  →  v1.2.3-dev.1  →  v1.2.3-rc.1  →  v1.2.3
 #
 # Triggers:
 #   push to main                → dev release   (automated, every merge)
 #   workflow_dispatch: staging  → rc release    (QA sign-off gate)
 #   workflow_dispatch: prod     → stable release (QA + stakeholder gate)
+#
+# Required secrets (repo settings → Secrets):
+#   SEMANTIC_RELEASE_APP_ID          GitHub App ID (for branch protection bypass)
+#   SEMANTIC_RELEASE_APP_PRIVATE_KEY GitHub App private key
 
 name: Release
 
@@ -37,4 +42,14 @@ jobs:
       environment: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
       environments: '["dev", "staging", "prod"]'
       prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
+
+      # Docker image promotion — retags GHCR images after each release.
+      # Images are built on PR (pr-<N> tag) by ci-caller.yaml.
+      # Remove the images input (or set to '') to skip image promotion.
+      images: >-
+        [
+          {"name": "my-app-api",    "bake_target": "api"},
+          {"name": "my-app-worker", "bake_target": "worker"}
+        ]
+      bake_file: docker-bake.hcl
     secrets: inherit

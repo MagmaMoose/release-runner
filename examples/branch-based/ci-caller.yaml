@@ -1,17 +1,26 @@
-# Tri-environment TBD example: CI workflow
+# Branch-based deployment example: CI workflow
 # Copy to: .github/workflows/ci.yaml in your application repo
 #
-# Triggers on every PR targeting main.
-# Builds each image (api + worker) tagged pr-<N> and pushes to GHCR.
-# Call tbd-ci.yaml once per image — each gets its own build job.
+# Deployment model: branch-based (GitFlow-esque)
+#   Each branch corresponds to an environment.
+#   PRs target the lowest environment branch (dev).
+#   Merges up the chain promote through environments.
 #
-# For a single-image repo, remove the second build job.
+# Branch model:
+#   feat/*, fix/* → PR → dev → staging → main
+#
+# Image tag model:
+#   PR targeting dev: pr-<N>
+#   (dev/staging/main releases are handled by release-caller.yaml)
+#
+# For PRs targeting higher branches (staging, main), add those branches
+# to the `branches:` list below.
 
 name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [dev]
     types: [opened, synchronize, reopened]
 
 concurrency:
@@ -19,7 +28,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── Add your test job(s) here and make build jobs depend on them ──────────
+  # ── Add your test job(s) here ─────────────────────────────────────────────
   # test:
   #   name: Tests
   #   runs-on: ubuntu-latest
@@ -36,6 +45,8 @@ jobs:
       bake_file: docker-bake.hcl
       bake_target: api
       platforms: linux/amd64
+      # Branch naming is flexible for branch-based pipelines.
+      # Set to false if your dev branches don't follow feat/fix/* convention.
       enforce_branch_naming: true
     secrets: inherit
 
