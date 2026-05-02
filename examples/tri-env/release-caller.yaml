@@ -1,0 +1,40 @@
+# Tri-environment TBD release workflow
+# Copy to: .github/workflows/release.yaml in your application repo
+#
+# Environment model:   dev  →  staging  →  prod
+# Version tag model:   v1.2.3-dev.1  →  v1.2.3-rc.1  →  v1.2.3
+#
+# Triggers:
+#   push to main                → dev release   (automated, every merge)
+#   workflow_dispatch: staging  → rc release    (QA sign-off gate)
+#   workflow_dispatch: prod     → stable release (QA + stakeholder gate)
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
+      - 'CHANGELOG.md'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Promote to environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - prod
+
+jobs:
+  release:
+    uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@main
+    with:
+      versioning-tool: semantic-release-python
+      environment: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
+      environments: '["dev", "staging", "prod"]'
+      prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
+    secrets: inherit

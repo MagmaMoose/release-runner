@@ -161,7 +161,7 @@ jobs:
 
       - name: Deploy (${{ inputs.image_name }} → ${{ inputs.service }})
         id: deploy-action
-        uses: calebsargeant/tbd-release@main
+        uses: calebsargeant/tbd-release/.github/actions/cloud-run-deploy@main
         with:
           ghcr-token: ${{ secrets.GITHUB_TOKEN }}
           gcp-credentials: ${{ secrets.GCP_CREDENTIALS }}

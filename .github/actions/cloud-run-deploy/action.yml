@@ -1,0 +1,182 @@
+name: 'Cloud Run Deploy (from GHCR)'
+description: >
+  Deploy a container image from GHCR to Google Cloud Run.
+  Handles GHCR → Google Artifact Registry mirroring for private images,
+  then deploys to Cloud Run with full runtime configuration.
+  Called internally by the tbd-deploy-cloud-run reusable workflow.
+  Reference as: calebsargeant/tbd-release/.github/actions/cloud-run-deploy@v1
+
+inputs:
+  ghcr-token:
+    description: 'GitHub token with read:packages permission (for GHCR pull). Usually secrets.GITHUB_TOKEN.'
+    required: true
+  gcp-credentials:
+    description: >
+      GCP service account credentials JSON.
+      Required IAM roles: roles/run.admin, roles/artifactregistry.writer, roles/iam.serviceAccountUser.
+    required: true
+  ghcr-image:
+    description: 'Full GHCR image reference with tag (e.g., ghcr.io/org/my-app:v1.2.3)'
+    required: true
+  service:
+    description: 'Cloud Run service name'
+    required: true
+  project-id:
+    description: 'GCP project ID'
+    required: true
+  region:
+    description: 'GCP region'
+    required: false
+    default: 'africa-south1'
+  gar-image:
+    description: >
+      Full GAR image path WITHOUT tag (e.g., africa-south1-docker.pkg.dev/my-project/my-repo/api).
+      The image tag from ghcr-image is appended automatically.
+      Required because Cloud Run cannot pull directly from private GHCR.
+    required: true
+  port:
+    description: 'Port the container listens on'
+    required: false
+    default: '8080'
+  cpu:
+    description: 'CPU allocation (e.g., 1, 2, 4000m)'
+    required: false
+    default: '1'
+  memory:
+    description: 'Memory allocation (e.g., 512Mi, 1Gi, 2Gi)'
+    required: false
+    default: '512Mi'
+  min-instances:
+    description: 'Minimum number of instances (0 = scale to zero)'
+    required: false
+    default: '0'
+  max-instances:
+    description: 'Maximum number of instances'
+    required: false
+    default: '10'
+  concurrency:
+    description: 'Maximum concurrent requests per instance'
+    required: false
+    default: '80'
+  timeout:
+    description: 'Request timeout in seconds'
+    required: false
+    default: '300'
+  allow-unauthenticated:
+    description: 'Allow unauthenticated (public) requests'
+    required: false
+    default: 'true'
+  service-account:
+    description: 'Service account email the Cloud Run service runs as'
+    required: false
+    default: ''
+  env-vars:
+    description: 'Environment variables as KEY=VALUE,KEY2=VALUE2 (passed to --set-env-vars)'
+    required: false
+    default: ''
+  gcloud-secrets:
+    description: >
+      Secret Manager bindings as KEY=SECRET_NAME:VERSION,KEY2=SECRET2:latest
+      (passed to --update-secrets). References secrets in the same GCP project.
+    required: false
+    default: ''
+
+outputs:
+  url:
+    description: 'The URL of the deployed Cloud Run service'
+    value: ${{ steps.deploy.outputs.url }}
+  gar-image-with-tag:
+    description: 'The full GAR image URL that was deployed'
+    value: ${{ steps.mirror.outputs.gar_full_image }}
+
+runs:
+  using: composite
+  steps:
+    - name: Log in to GHCR
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.ghcr-token }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ inputs.gcp-credentials }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ inputs.project-id }}
+
+    - name: Configure Docker for GAR
+      shell: bash
+      run: gcloud auth configure-docker ${{ inputs.region }}-docker.pkg.dev --quiet
+
+    - name: Mirror image from GHCR to GAR
+      id: mirror
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        GHCR_IMAGE="${{ inputs.ghcr-image }}"
+        # Extract the tag from the GHCR image reference (everything after the last colon)
+        IMAGE_TAG="${GHCR_IMAGE##*:}"
+        GAR_FULL_IMAGE="${{ inputs.gar-image }}:${IMAGE_TAG}"
+
+        echo "Mirroring ${GHCR_IMAGE} → ${GAR_FULL_IMAGE}"
+        docker buildx imagetools create --tag "${GAR_FULL_IMAGE}" "${GHCR_IMAGE}"
+
+        echo "gar_full_image=${GAR_FULL_IMAGE}" >> "$GITHUB_OUTPUT"
+        echo "Mirrored successfully."
+
+    - name: Deploy to Cloud Run
+      id: deploy
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        CMD=(
+          gcloud run deploy "${{ inputs.service }}"
+          "--image=${{ steps.mirror.outputs.gar_full_image }}"
+          "--region=${{ inputs.region }}"
+          --platform=managed
+          "--port=${{ inputs.port }}"
+          "--cpu=${{ inputs.cpu }}"
+          "--memory=${{ inputs.memory }}"
+          "--min-instances=${{ inputs.min-instances }}"
+          "--max-instances=${{ inputs.max-instances }}"
+          "--concurrency=${{ inputs.concurrency }}"
+          "--timeout=${{ inputs.timeout }}"
+          --quiet
+        )
+
+        if [[ "${{ inputs.allow-unauthenticated }}" == "true" ]]; then
+          CMD+=(--allow-unauthenticated)
+        else
+          CMD+=(--no-allow-unauthenticated)
+        fi
+
+        if [[ -n "${{ inputs.service-account }}" ]]; then
+          CMD+=("--service-account=${{ inputs.service-account }}")
+        fi
+
+        if [[ -n "${{ inputs.env-vars }}" ]]; then
+          CMD+=("--set-env-vars=${{ inputs.env-vars }}")
+        fi
+
+        if [[ -n "${{ inputs.gcloud-secrets }}" ]]; then
+          CMD+=("--update-secrets=${{ inputs.gcloud-secrets }}")
+        fi
+
+        echo "Deploying to Cloud Run..."
+        "${CMD[@]}"
+
+        URL=$(gcloud run services describe "${{ inputs.service }}" \
+          "--region=${{ inputs.region }}" \
+          --format='value(status.url)')
+        echo "url=${URL}" >> "$GITHUB_OUTPUT"
+        echo "Deployed: ${URL}"

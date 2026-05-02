@@ -1,185 +1,415 @@
-name: 'TBD Cloud Run Deploy'
+name: 'TBD Release'
 description: >
-  Deploy a container image from GHCR to Google Cloud Run.
-  Handles GHCR → Google Artifact Registry mirroring for private images,
-  then deploys to Cloud Run with full runtime configuration.
-  Part of the Trunk-Based Development release management strategy.
+  Trunk-Based Development semantic release management.
+  Calculates the correct semantic version for any environment in a
+  dual-, tri-, or quad-environment TBD pipeline.
+  Supports python-semantic-release, semantic-release (npm),
+  GitVersion, and release-please.
 
 branding:
-  icon: 'truck'
-  color: 'blue'
+  icon: 'git-branch'
+  color: 'purple'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# INPUTS
+# ─────────────────────────────────────────────────────────────────────────────
 inputs:
-  ghcr-token:
-    description: 'GitHub token with read:packages permission (for GHCR pull). Usually secrets.GITHUB_TOKEN.'
+
+  # ── Versioning tool ──────────────────────────────────────────────────────
+  versioning-tool:
+    description: |
+      The versioning tool to use. One of:
+        semantic-release-python   python-semantic-release v10 (default)
+        semantic-release-npm      semantic-release v24 (Node.js / JavaScript)
+        gitversion                GitVersion via gittools/actions
+        release-please            Google release-please-action v4
+    required: false
+    default: 'semantic-release-python'
+
+  # ── Environment model ────────────────────────────────────────────────────
+  environment:
+    description: |
+      The target environment for this run.
+      Must be one of the values in `environments`.
+      The LAST value in `environments` is always the production (stable) env.
     required: true
-  gcp-credentials:
-    description: >
-      GCP service account credentials JSON.
-      Required IAM roles: roles/run.admin, roles/artifactregistry.writer, roles/iam.serviceAccountUser.
+
+  environments:
+    description: |
+      JSON array of environment names in promotion order.
+      The last entry is always treated as production (stable semver).
+
+      Built-in profiles (use as-is or override):
+        dual:  ["dev", "prod"]
+        tri:   ["dev", "staging", "prod"]    ← default
+        quad:  ["dev", "tst", "acc", "prd"]
+    required: false
+    default: '["dev", "staging", "prod"]'
+
+  prerelease-identifiers:
+    description: |
+      JSON object mapping environment names to prerelease identifier strings.
+      The production environment (last in `environments`) is always stable
+      and must be omitted from this map.
+
+      Built-in defaults:
+        tri:   {"dev": "dev", "staging": "rc"}
+        quad:  {"dev": "dev", "tst": "alpha", "acc": "beta"}
+    required: false
+    default: '{"dev": "dev", "staging": "rc"}'
+
+  tag-prefix:
+    description: 'Version tag prefix. Default: v'
+    required: false
+    default: 'v'
+
+  # ── Authentication ────────────────────────────────────────────────────────
+  github-token:
+    description: |
+      GitHub token used for git push, tag creation, and GitHub Releases.
+      Use secrets.GITHUB_TOKEN for read/write access to the current repo,
+      or a PAT / GitHub App token to bypass branch protection rules.
     required: true
-  ghcr-image:
-    description: 'Full GHCR image reference with tag (e.g., ghcr.io/org/my-app:v1.2.3)'
-    required: true
-  service:
-    description: 'Cloud Run service name'
-    required: true
-  project-id:
-    description: 'GCP project ID'
-    required: true
-  region:
-    description: 'GCP region'
+
+  app-id:
+    description: |
+      GitHub App ID. When provided together with app-private-key, a short-lived
+      installation token is generated and used instead of github-token.
+      Recommended for repos with branch protection on main — allows the
+      release commit and tag to be pushed without disabling protection.
     required: false
-    default: 'africa-south1'
-  gar-image:
-    description: >
-      Full GAR image path WITHOUT tag (e.g., africa-south1-docker.pkg.dev/my-project/my-repo/api).
-      The image tag from ghcr-image is appended automatically.
-      Required because Cloud Run cannot pull directly from private GHCR.
-    required: true
-  port:
-    description: 'Port the container listens on'
+    default: ''
+
+  app-private-key:
+    description: 'GitHub App private key (PEM). Required when app-id is set.'
     required: false
-    default: '8080'
-  cpu:
-    description: 'CPU allocation (e.g., 1, 2, 4000m)'
+    default: ''
+
+  # ── Common tool options ───────────────────────────────────────────────────
+  working-directory:
+    description: |
+      Working directory containing the versioning config file.
+      For semantic-release-python: contains pyproject.toml
+      For semantic-release-npm:    contains .releaserc.json / package.json
+      For gitversion:              contains GitVersion.yml
     required: false
-    default: '1'
-  memory:
-    description: 'Memory allocation (e.g., 512Mi, 1Gi, 2Gi)'
-    required: false
-    default: '512Mi'
-  min-instances:
-    description: 'Minimum number of instances (0 = scale to zero)'
-    required: false
-    default: '0'
-  max-instances:
-    description: 'Maximum number of instances'
-    required: false
-    default: '10'
-  concurrency:
-    description: 'Maximum concurrent requests per instance'
-    required: false
-    default: '80'
-  timeout:
-    description: 'Request timeout in seconds'
-    required: false
-    default: '300'
-  allow-unauthenticated:
-    description: 'Allow unauthenticated (public) requests'
+    default: '.'
+
+  create-release:
+    description: 'Create a GitHub Release. Set to "false" for non-prod environments if preferred.'
     required: false
     default: 'true'
-  service-account:
-    description: 'Service account email the Cloud Run service runs as'
-    required: false
-    default: ''
-  env-vars:
-    description: 'Environment variables as KEY=VALUE,KEY2=VALUE2 (passed to --set-env-vars)'
-    required: false
-    default: ''
-  gcloud-secrets:
-    description: >
-      Secret Manager bindings as KEY=SECRET_NAME:VERSION,KEY2=SECRET2:latest
-      (passed to --update-secrets). References secrets in the same GCP project.
-    required: false
-    default: ''
 
+  changelog:
+    description: 'Generate/update CHANGELOG.md (supported by semantic-release-python and semantic-release-npm).'
+    required: false
+    default: 'true'
+
+  # ── GitVersion-specific ───────────────────────────────────────────────────
+  gitversion-spec:
+    description: 'GitVersion version spec (e.g., 6.x, 5.x). Only used when versioning-tool is gitversion.'
+    required: false
+    default: '6.x'
+
+  gitversion-config:
+    description: 'Path to GitVersion.yml. Only used when versioning-tool is gitversion.'
+    required: false
+    default: 'GitVersion.yml'
+
+  # ── release-please-specific ───────────────────────────────────────────────
+  release-please-release-type:
+    description: |
+      release-please release type (e.g., python, node, simple, go).
+      Only used when versioning-tool is release-please.
+    required: false
+    default: 'simple'
+
+  release-please-config-file:
+    description: 'Path to release-please-config.json. Only used when versioning-tool is release-please.'
+    required: false
+    default: 'release-please-config.json'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────────────────────────────────────
 outputs:
-  url:
-    description: 'The URL of the deployed Cloud Run service'
-    value: ${{ steps.deploy.outputs.url }}
-  gar-image-with-tag:
-    description: 'The full GAR image URL that was deployed'
-    value: ${{ steps.mirror.outputs.gar_full_image }}
+  version:
+    description: 'Semver version string without prefix (e.g., 1.2.3 or 1.2.3-rc.1)'
+    value: ${{ steps.normalize.outputs.version }}
+  tag:
+    description: 'Full git tag with prefix (e.g., v1.2.3 or v1.2.3-rc.1)'
+    value: ${{ steps.normalize.outputs.tag }}
+  is-prerelease:
+    description: '"true" if this environment produces a prerelease version'
+    value: ${{ steps.detect-env.outputs.is_prerelease }}
+  released:
+    description: '"true" if a new version was created and published'
+    value: ${{ steps.normalize.outputs.released }}
+  prerelease-identifier:
+    description: 'The prerelease identifier for this environment (e.g., dev, rc, alpha). Empty for production.'
+    value: ${{ steps.detect-env.outputs.prerelease_identifier }}
+  resolved-environment:
+    description: 'The resolved environment name (echoes the environment input after validation)'
+    value: ${{ steps.detect-env.outputs.environment }}
 
+# ─────────────────────────────────────────────────────────────────────────────
+# STEPS
+# ─────────────────────────────────────────────────────────────────────────────
 runs:
   using: composite
   steps:
-    - name: Log in to GHCR
-      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+
+    # ── 1. Optional GitHub App token ────────────────────────────────────────
+    - name: Generate GitHub App token
+      id: app-token
+      if: inputs.app-id != '' && inputs.app-private-key != ''
+      uses: actions/create-github-app-token@v1
       with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ inputs.ghcr-token }}
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
-    - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v2
+    # ── 2. Checkout ─────────────────────────────────────────────────────────
+    - name: Checkout
+      uses: actions/checkout@v4
       with:
-        credentials_json: ${{ inputs.gcp-credentials }}
+        fetch-depth: 0
+        fetch-tags: true
+        token: ${{ steps.app-token.outputs.token || inputs.github-token }}
 
-    - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v2
-      with:
-        project_id: ${{ inputs.project-id }}
-
-    - name: Configure Docker for GAR
-      shell: bash
-      run: gcloud auth configure-docker ${{ inputs.region }}-docker.pkg.dev --quiet
-
-    - name: Mirror image from GHCR to GAR
-      id: mirror
+    # ── 3. Detect environment & resolve prerelease config ───────────────────
+    - name: Detect environment
+      id: detect-env
       shell: bash
       run: |
         set -euo pipefail
 
-        GHCR_IMAGE="${{ inputs.ghcr-image }}"
-        # Extract the tag from the GHCR image reference (everything after the last colon)
-        IMAGE_TAG="${GHCR_IMAGE##*:}"
-        GAR_FULL_IMAGE="${{ inputs.gar-image }}:${IMAGE_TAG}"
+        ENV="${{ inputs.environment }}"
+        ENVS='${{ inputs.environments }}'
+        IDS='${{ inputs.prerelease-identifiers }}'
 
-        echo "Mirroring ${GHCR_IMAGE} → ${GAR_FULL_IMAGE}"
-        docker buildx imagetools create --tag "${GAR_FULL_IMAGE}" "${GHCR_IMAGE}"
+        echo "Environment:  ${ENV}"
+        echo "Environments: ${ENVS}"
+        echo "Identifiers:  ${IDS}"
 
-        echo "gar_full_image=${GAR_FULL_IMAGE}" >> "$GITHUB_OUTPUT"
-        echo "Mirrored successfully."
+        # Validate env is in the environments array
+        if ! echo "${ENVS}" | jq -e --arg env "${ENV}" 'index($env) != null' > /dev/null; then
+          echo "::error::Environment '${ENV}' is not in the environments array: ${ENVS}"
+          exit 1
+        fi
 
-    - name: Deploy to Cloud Run
-      id: deploy
-      shell: bash
-      run: |
-        set -euo pipefail
+        # The last entry in the array is always production (stable)
+        PROD_ENV=$(echo "${ENVS}" | jq -r '.[-1]')
+        echo "Production environment: ${PROD_ENV}"
 
-        CMD=(
-          gcloud run deploy "${{ inputs.service }}"
-          "--image=${{ steps.mirror.outputs.gar_full_image }}"
-          "--region=${{ inputs.region }}"
-          --platform=managed
-          "--port=${{ inputs.port }}"
-          "--cpu=${{ inputs.cpu }}"
-          "--memory=${{ inputs.memory }}"
-          "--min-instances=${{ inputs.min-instances }}"
-          "--max-instances=${{ inputs.max-instances }}"
-          "--concurrency=${{ inputs.concurrency }}"
-          "--timeout=${{ inputs.timeout }}"
-          --quiet
-        )
-
-        if [[ "${{ inputs.allow-unauthenticated }}" == "true" ]]; then
-          CMD+=(--allow-unauthenticated)
+        if [ "${ENV}" == "${PROD_ENV}" ]; then
+          echo "is_prerelease=false"     >> "$GITHUB_OUTPUT"
+          echo "prerelease_identifier="  >> "$GITHUB_OUTPUT"
+          echo "Resolved: STABLE release for '${ENV}'"
         else
-          CMD+=(--no-allow-unauthenticated)
+          IDENTIFIER=$(echo "${IDS}" | jq -r --arg env "${ENV}" '.[$env] // "rc"')
+          echo "is_prerelease=true"                        >> "$GITHUB_OUTPUT"
+          echo "prerelease_identifier=${IDENTIFIER}"       >> "$GITHUB_OUTPUT"
+          echo "Resolved: PRERELEASE '${IDENTIFIER}' for '${ENV}'"
         fi
 
-        if [[ -n "${{ inputs.service-account }}" ]]; then
-          CMD+=("--service-account=${{ inputs.service-account }}")
+        echo "environment=${ENV}" >> "$GITHUB_OUTPUT"
+
+    # ── 4a. python-semantic-release ─────────────────────────────────────────
+    - name: Run python-semantic-release
+      id: psr
+      if: inputs.versioning-tool == 'semantic-release-python'
+      uses: python-semantic-release/python-semantic-release@v10
+      with:
+        github_token: ${{ steps.app-token.outputs.token || inputs.github-token }}
+        git_committer_name: github-actions[bot]
+        prerelease: ${{ steps.detect-env.outputs.is_prerelease }}
+        prerelease_token: ${{ steps.detect-env.outputs.prerelease_identifier }}
+        build: false
+        changelog: ${{ inputs.changelog }}
+        vcs_release: ${{ inputs.create-release }}
+        commit: true
+        directory: ${{ inputs.working-directory }}
+
+    # ── 4b. semantic-release (npm) ──────────────────────────────────────────
+    - name: Set up Node.js (for semantic-release-npm)
+      if: inputs.versioning-tool == 'semantic-release-npm'
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Run semantic-release (npm)
+      id: semrel-npm
+      if: inputs.versioning-tool == 'semantic-release-npm'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GITHUB_TOKEN: ${{ steps.app-token.outputs.token || inputs.github-token }}
+        GIT_AUTHOR_NAME: github-actions[bot]
+        GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+        GIT_COMMITTER_NAME: github-actions[bot]
+        GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+      run: |
+        set -euo pipefail
+
+        IS_PRERELEASE="${{ steps.detect-env.outputs.is_prerelease }}"
+        IDENTIFIER="${{ steps.detect-env.outputs.prerelease_identifier }}"
+
+        # Install semantic-release if not present in node_modules
+        if ! npx --no semantic-release --version &>/dev/null; then
+          npm install --no-save semantic-release
         fi
 
-        if [[ -n "${{ inputs.env-vars }}" ]]; then
-          CMD+=("--set-env-vars=${{ inputs.env-vars }}")
+        # Build the command - semantic-release v24 supports --prerelease flag
+        if [ "${IS_PRERELEASE}" == "true" ]; then
+          npx semantic-release --prerelease "${IDENTIFIER}"
+        else
+          npx semantic-release
         fi
 
-        if [[ -n "${{ inputs.gcloud-secrets }}" ]]; then
-          CMD+=("--update-secrets=${{ inputs.gcloud-secrets }}")
+        # Capture the tag that was just created
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+
+    # ── 4c. GitVersion ──────────────────────────────────────────────────────
+    - name: Install GitVersion
+      if: inputs.versioning-tool == 'gitversion'
+      uses: gittools/actions/gitversion/setup@v3
+      with:
+        versionSpec: ${{ inputs.gitversion-spec }}
+
+    - name: Execute GitVersion
+      id: gitversion
+      if: inputs.versioning-tool == 'gitversion'
+      uses: gittools/actions/gitversion/execute@v3
+      with:
+        useConfigFile: true
+        configFilePath: ${{ inputs.gitversion-config }}
+
+    - name: Create GitVersion release tag
+      id: gitversion-tag
+      if: inputs.versioning-tool == 'gitversion'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.app-token.outputs.token || inputs.github-token }}
+      run: |
+        set -euo pipefail
+
+        IS_PRERELEASE="${{ steps.detect-env.outputs.is_prerelease }}"
+        IDENTIFIER="${{ steps.detect-env.outputs.prerelease_identifier }}"
+        PREFIX="${{ inputs.tag-prefix }}"
+
+        if [ "${IS_PRERELEASE}" == "true" ]; then
+          # Use GitVersion's pre-release aware version
+          BASE="${{ steps.gitversion.outputs.majorMinorPatch }}"
+          # Find the next prerelease number for this identifier
+          LATEST=$(git tag -l "${PREFIX}${BASE}-${IDENTIFIER}.*" | sort -V | tail -1)
+          if [ -z "${LATEST}" ]; then
+            PRE_NUM=1
+          else
+            PRE_NUM=$(echo "${LATEST}" | grep -oE "${IDENTIFIER}\.[0-9]+" | cut -d. -f2)
+            PRE_NUM=$((PRE_NUM + 1))
+          fi
+          VERSION="${BASE}-${IDENTIFIER}.${PRE_NUM}"
+        else
+          VERSION="${{ steps.gitversion.outputs.majorMinorPatch }}"
         fi
 
-        echo "Deploying to Cloud Run..."
-        "${CMD[@]}"
+        TAG="${PREFIX}${VERSION}"
+        echo "Creating tag: ${TAG}"
 
-        URL=$(gcloud run services describe "${{ inputs.service }}" \
-          "--region=${{ inputs.region }}" \
-          --format='value(status.url)')
-        echo "url=${URL}" >> "$GITHUB_OUTPUT"
-        echo "Deployed: ${URL}"
+        git config user.name  "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a "${TAG}" -m "chore(release): ${TAG}"
+
+        # Push tag via HTTPS with token
+        REMOTE_URL=$(git remote get-url origin)
+        AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GITHUB_TOKEN}@|")
+        git push "${AUTHED_URL}" "${TAG}"
+
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
+
+        # Create GitHub Release if requested
+        if [ "${{ inputs.create-release }}" == "true" ]; then
+          IS_PRE_FLAG=""
+          [ "${IS_PRERELEASE}" == "true" ] && IS_PRE_FLAG="--prerelease"
+          gh release create "${TAG}" \
+            --title "${TAG}" \
+            --generate-notes \
+            ${IS_PRE_FLAG} || true
+        fi
+
+    # ── 4d. release-please ──────────────────────────────────────────────────
+    - name: Run release-please
+      id: release-please
+      if: inputs.versioning-tool == 'release-please'
+      uses: googleapis/release-please-action@v4
+      with:
+        token: ${{ steps.app-token.outputs.token || inputs.github-token }}
+        release-type: ${{ inputs.release-please-release-type }}
+        config-file: ${{ inputs.release-please-config-file }}
+
+    # ── 5. Normalize outputs ─────────────────────────────────────────────────
+    # Collects version/tag/released from whichever tool ran and exposes
+    # a consistent set of outputs regardless of which tool was used.
+    - name: Normalize outputs
+      id: normalize
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        TOOL="${{ inputs.versioning-tool }}"
+        PREFIX="${{ inputs.tag-prefix }}"
+        VERSION=""
+        RELEASED="false"
+        TAG=""
+
+        case "${TOOL}" in
+          semantic-release-python)
+            VERSION="${{ steps.psr.outputs.version }}"
+            RELEASED="${{ steps.psr.outputs.released }}"
+            TAG="${{ steps.psr.outputs.tag }}"
+            ;;
+
+          semantic-release-npm)
+            LATEST_TAG="${{ steps.semrel-npm.outputs.latest_tag }}"
+            if [ -n "${LATEST_TAG}" ]; then
+              VERSION="${LATEST_TAG#${PREFIX}}"
+              TAG="${LATEST_TAG}"
+              RELEASED="true"
+            fi
+            ;;
+
+          gitversion)
+            VERSION="${{ steps.gitversion-tag.outputs.version }}"
+            TAG="${{ steps.gitversion-tag.outputs.tag }}"
+            RELEASED="true"
+            ;;
+
+          release-please)
+            if [ "${{ steps.release-please.outputs.release_created }}" == "true" ]; then
+              TAG="${{ steps.release-please.outputs.tag_name }}"
+              VERSION="${TAG#${PREFIX}}"
+              RELEASED="true"
+            fi
+            ;;
+        esac
+
+        # Fallback: if version is empty after running the tool, read latest git tag
+        if [ -z "${VERSION}" ]; then
+          LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "${LATEST}" ]; then
+            VERSION="${LATEST#${PREFIX}}"
+            TAG="${LATEST}"
+          fi
+        fi
+
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
+        echo "released=${RELEASED}" >> "$GITHUB_OUTPUT"
+
+        echo "Tool:     ${TOOL}"
+        echo "Version:  ${VERSION}"
+        echo "Tag:      ${TAG}"
+        echo "Released: ${RELEASED}"

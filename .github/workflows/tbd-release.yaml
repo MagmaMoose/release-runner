@@ -1,64 +1,130 @@
-name: TBD Release — Semantic Versioning
+name: TBD Release — Version & Publish
 
-# Reusable workflow: runs python-semantic-release on push to main, calculating
-# the next semver from conventional commits and creating a GitHub Release.
-# The release event then triggers your deploy workflow.
+# Reusable workflow: runs the calebsargeant/tbd-release action for a given
+# environment in the TBD pipeline. Handles version calculation, git tagging,
+# CHANGELOG update, and GitHub Release creation.
 #
-# Requires the caller repo to have:
-#   - A pyproject.toml with [tool.semantic_release] config
-#   - Either SEMANTIC_RELEASE_APP_ID + SEMANTIC_RELEASE_APP_PRIVATE_KEY secrets
-#     (recommended — allows bypassing branch protection on the release commit),
-#     or a SEMANTIC_RELEASE_TOKEN PAT.
+# Supports all versioning tools exposed by the root action:
+#   semantic-release-python, semantic-release-npm, gitversion, release-please
 #
-# See calebsargeant/reusable-workflows for GitHub App setup instructions.
+# Typical trigger: push to main (for the first/automated environment, e.g. dev)
+# or workflow_dispatch (for manual promotion to staging/prod).
 
 on:
   workflow_call:
     inputs:
-      python_version:
-        description: 'Python version for semantic-release'
+      versioning-tool:
+        description: 'semantic-release-python | semantic-release-npm | gitversion | release-please'
         required: false
         type: string
-        default: '3.11'
-      working_directory:
-        description: 'Directory containing pyproject.toml (relative to repo root)'
+        default: 'semantic-release-python'
+      environment:
+        description: 'Target environment (must be in environments array). Last entry = prod (stable).'
+        required: true
+        type: string
+      environments:
+        description: 'JSON array of environments in promotion order. e.g. ["dev","staging","prod"]'
+        required: false
+        type: string
+        default: '["dev", "staging", "prod"]'
+      prerelease-identifiers:
+        description: 'JSON map of env → prerelease token. e.g. {"dev":"dev","staging":"rc"}'
+        required: false
+        type: string
+        default: '{"dev": "dev", "staging": "rc"}'
+      tag-prefix:
+        required: false
+        type: string
+        default: 'v'
+      working-directory:
+        description: 'Directory containing versioning config (pyproject.toml, .releaserc.json, etc.)'
         required: false
         type: string
         default: '.'
-      fetch_depth:
-        description: 'Git fetch depth. 0 = full history (required for accurate semver).'
+      create-release:
+        description: 'Create a GitHub Release'
         required: false
-        type: number
-        default: 0
+        type: boolean
+        default: true
+      changelog:
+        required: false
+        type: boolean
+        default: true
+      runner:
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      # GitVersion specific
+      gitversion-spec:
+        required: false
+        type: string
+        default: '6.x'
+      gitversion-config:
+        required: false
+        type: string
+        default: 'GitVersion.yml'
+      # release-please specific
+      release-please-release-type:
+        required: false
+        type: string
+        default: 'simple'
+      release-please-config-file:
+        required: false
+        type: string
+        default: 'release-please-config.json'
     outputs:
       version:
-        description: 'The new release version (e.g., 1.2.3). Empty if no release was made.'
-        value: ${{ jobs.semantic-release.outputs.version }}
-      released:
-        description: '"true" if a new release was published.'
-        value: ${{ jobs.semantic-release.outputs.released }}
+        description: 'Version string (e.g., 1.2.3 or 1.2.3-rc.1)'
+        value: ${{ jobs.release.outputs.version }}
       tag:
-        description: 'The git tag created (e.g., v1.2.3).'
-        value: ${{ jobs.semantic-release.outputs.tag }}
+        description: 'Git tag (e.g., v1.2.3 or v1.2.3-rc.1)'
+        value: ${{ jobs.release.outputs.tag }}
+      is-prerelease:
+        description: '"true" if this is a prerelease'
+        value: ${{ jobs.release.outputs.is_prerelease }}
+      released:
+        description: '"true" if a new version was published'
+        value: ${{ jobs.release.outputs.released }}
     secrets:
+      GITHUB_TOKEN_RELEASE:
+        description: 'GitHub token or PAT for release operations (defaults to GITHUB_TOKEN)'
+        required: false
       SEMANTIC_RELEASE_APP_ID:
-        description: 'GitHub App ID for bypassing branch protection'
+        description: 'GitHub App ID (optional, for bypassing branch protection)'
         required: false
       SEMANTIC_RELEASE_APP_PRIVATE_KEY:
         description: 'GitHub App private key'
         required: false
-      SEMANTIC_RELEASE_TOKEN:
-        description: 'PAT fallback (if not using GitHub App)'
-        required: false
 
 jobs:
-  semantic-release:
-    uses: calebsargeant/reusable-workflows/.github/workflows/semantic-release.yaml@main
-    with:
-      python_version: ${{ inputs.python_version }}
-      working_directory: ${{ inputs.working_directory }}
-      fetch_depth: ${{ inputs.fetch_depth }}
-    secrets:
-      SEMANTIC_RELEASE_APP_ID: ${{ secrets.SEMANTIC_RELEASE_APP_ID }}
-      SEMANTIC_RELEASE_APP_PRIVATE_KEY: ${{ secrets.SEMANTIC_RELEASE_APP_PRIVATE_KEY }}
-      SEMANTIC_RELEASE_TOKEN: ${{ secrets.SEMANTIC_RELEASE_TOKEN }}
+  release:
+    name: Release (${{ inputs.environment }})
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: write
+      id-token: write
+    outputs:
+      version:       ${{ steps.tbd.outputs.version }}
+      tag:           ${{ steps.tbd.outputs.tag }}
+      is_prerelease: ${{ steps.tbd.outputs.is-prerelease }}
+      released:      ${{ steps.tbd.outputs.released }}
+    steps:
+      - name: Run TBD Release
+        id: tbd
+        uses: calebsargeant/tbd-release@main
+        with:
+          versioning-tool:             ${{ inputs.versioning-tool }}
+          environment:                 ${{ inputs.environment }}
+          environments:                ${{ inputs.environments }}
+          prerelease-identifiers:      ${{ inputs.prerelease-identifiers }}
+          tag-prefix:                  ${{ inputs.tag-prefix }}
+          working-directory:           ${{ inputs.working-directory }}
+          create-release:              ${{ inputs.create-release }}
+          changelog:                   ${{ inputs.changelog }}
+          github-token:                ${{ secrets.GITHUB_TOKEN_RELEASE || secrets.GITHUB_TOKEN }}
+          app-id:                      ${{ secrets.SEMANTIC_RELEASE_APP_ID }}
+          app-private-key:             ${{ secrets.SEMANTIC_RELEASE_APP_PRIVATE_KEY }}
+          gitversion-spec:             ${{ inputs.gitversion-spec }}
+          gitversion-config:           ${{ inputs.gitversion-config }}
+          release-please-release-type: ${{ inputs.release-please-release-type }}
+          release-please-config-file:  ${{ inputs.release-please-config-file }}

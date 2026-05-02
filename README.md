@@ -1,172 +1,215 @@
-# TBD Cloud Run Deploy
+# TBD Release
 
-A GitHub Marketplace action for **Trunk-Based Development (TBD)** release pipelines that deploy container images from GHCR to Google Cloud Run.
+A GitHub Marketplace action for **Trunk-Based Development** semantic release management.
 
-## The problem this solves
+Calculates and publishes the correct semantic version for any environment in a
+dual-, tri-, or quad-environment TBD pipeline. Supports multiple versioning tools
+and keeps the version tag format consistent regardless of which tool is used underneath.
 
-Google Cloud Run (fully managed) cannot pull directly from private GHCR repositories — it only has native authentication to Google Artifact Registry. This action solves that gap transparently:
+---
 
-1. Pulls your versioned image from GHCR using `GITHUB_TOKEN`
-2. Mirrors it to Google Artifact Registry using `docker buildx imagetools create` (cross-registry retag — no layers downloaded twice)
-3. Runs `gcloud run deploy` from GAR
+## The model
 
-GHCR stays the **canonical registry** for your TBD pipeline. GAR is only the last-mile delivery mechanism for Cloud Run.
+```
+main (trunk)
+  │
+  ├─► merge  →  v1.2.3-dev.1    (DEV — automated, every merge)
+  │                  │
+  │            QA sign-off
+  │                  │
+  ├──────────────►  v1.2.3-rc.1  (STAGING — gated)
+  │                       │
+  │               QA + Stakeholder
+  │                       │
+  └──────────────────────► v1.2.3   (PROD — gated, stable)
+```
+
+One branch. One image, built once. Version tag is the promotion mechanism.
+The last environment in your `environments` array always produces a stable semver tag.
+All preceding environments produce prerelease tags with configurable identifiers.
+
+---
 
 ## Quick start
 
 ```yaml
 - uses: calebsargeant/tbd-release@v1
   with:
-    ghcr-token:     ${{ secrets.GITHUB_TOKEN }}
-    gcp-credentials: ${{ secrets.GCP_SA_KEY }}
-    ghcr-image:     ghcr.io/my-org/my-app:v1.2.3
-    service:        my-app-api
-    project-id:     my-gcp-project
-    gar-image:      africa-south1-docker.pkg.dev/my-gcp-project/my-repo/api
+    versioning-tool: semantic-release-python
+    environment:     dev          # or staging, prod — drives stable vs prerelease
+    environments:    '["dev", "staging", "prod"]'
+    prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
+    github-token:    ${{ secrets.GITHUB_TOKEN }}
 ```
 
-## Full example — TBD deploy workflow
+**That single step produces `v1.2.3-dev.1` when run for `dev`, `v1.2.3-rc.1` for `staging`,
+and `v1.2.3` for `prod`.** No extra logic required.
 
-```yaml
-name: Deploy
+---
 
-on:
-  release:
-    types: [published]
+## Environment profiles
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: production          # GitHub Environment gate — requires reviewer approval
-    permissions:
-      contents: read
-      id-token: write
-      packages: read
-    steps:
-      - uses: calebsargeant/tbd-release@v1
-        with:
-          # Auth
-          ghcr-token:      ${{ secrets.GITHUB_TOKEN }}
-          gcp-credentials: ${{ secrets.GCP_SA_KEY_PROD }}
+| Profile | `environments` | `prerelease-identifiers` | Tag examples |
+|---|---|---|---|
+| **Dual** | `["dev", "prod"]` | `{"dev": "dev"}` | `v1.2.3-dev.1` → `v1.2.3` |
+| **Tri** *(default)* | `["dev", "staging", "prod"]` | `{"dev": "dev", "staging": "rc"}` | `v1.2.3-dev.1` → `v1.2.3-rc.1` → `v1.2.3` |
+| **Quad** | `["dev", "tst", "acc", "prd"]` | `{"dev": "dev", "tst": "alpha", "acc": "beta"}` | `v1.2.3-dev.1` → `v1.2.3-alpha.1` → `v1.2.3-beta.1` → `v1.2.3` |
 
-          # Image — the versioned tag from your CI pipeline (e.g. pr-42 promoted to v1.2.3)
-          ghcr-image:  ghcr.io/my-org/my-app:${{ github.event.release.tag_name }}
+Environment names are fully configurable — use any naming convention your org prefers.
 
-          # Cloud Run
-          service:     my-app-api
-          project-id:  my-gcp-project
-          region:      africa-south1
-          gar-image:   africa-south1-docker.pkg.dev/my-gcp-project/my-repo/api
+---
 
-          # Runtime sizing
-          port:          '8000'
-          cpu:           '2'
-          memory:        '2Gi'
-          min-instances: '1'
-          max-instances: '10'
-          concurrency:   '100'
-          timeout:       '300'
+## Supported versioning tools
 
-          # Identity and config
-          allow-unauthenticated: 'true'
-          service-account: my-app@my-gcp-project.iam.gserviceaccount.com
-          env-vars:        'ENVIRONMENT=prod,PORT=8000,LOG_LEVEL=info'
-          gcloud-secrets:  'DATABASE_URL=database-url:latest,SECRET_KEY=secret-key:latest'
-```
+| `versioning-tool` | Tool | Config file |
+|---|---|---|
+| `semantic-release-python` *(default)* | [python-semantic-release](https://python-semantic-release.readthedocs.io/) v10 | `pyproject.toml` |
+| `semantic-release-npm` | [semantic-release](https://semantic-release.gitbook.io/) v24 | `.releaserc.json` / `package.json` |
+| `gitversion` | [GitVersion](https://gitversion.net/) v6 via gittools/actions | `GitVersion.yml` |
+| `release-please` | [release-please](https://github.com/googleapis/release-please) v4 | `release-please-config.json` |
+
+Example config files for each tool are in [`examples/config/`](examples/config/).
+
+---
 
 ## Inputs
 
+### Core
+
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `ghcr-token` | ✅ | — | GitHub token with `read:packages`. Use `secrets.GITHUB_TOKEN`. |
-| `gcp-credentials` | ✅ | — | GCP service account credentials JSON. See [IAM requirements](#iam-requirements). |
-| `ghcr-image` | ✅ | — | Full GHCR image reference with tag. e.g. `ghcr.io/org/my-app:v1.2.3` |
-| `service` | ✅ | — | Cloud Run service name |
-| `project-id` | ✅ | — | GCP project ID |
-| `gar-image` | ✅ | — | GAR image path **without** tag. e.g. `africa-south1-docker.pkg.dev/my-project/my-repo/api` |
-| `region` | | `africa-south1` | GCP region |
-| `port` | | `8080` | Container port |
-| `cpu` | | `1` | CPU allocation. e.g. `1`, `2`, `4000m` |
-| `memory` | | `512Mi` | Memory allocation. e.g. `512Mi`, `1Gi`, `2Gi` |
-| `min-instances` | | `0` | Minimum instances. `0` = scale to zero. |
-| `max-instances` | | `10` | Maximum instances |
-| `concurrency` | | `80` | Max concurrent requests per instance |
-| `timeout` | | `300` | Request timeout in seconds |
-| `allow-unauthenticated` | | `true` | Allow public (unauthenticated) requests |
-| `service-account` | | `''` | Service account email for the Cloud Run service identity |
-| `env-vars` | | `''` | Environment variables as `KEY=VALUE,KEY2=VALUE2` |
-| `gcloud-secrets` | | `''` | Secret Manager bindings as `KEY=SECRET_NAME:VERSION` |
+| `versioning-tool` | | `semantic-release-python` | Versioning tool to use |
+| `environment` | ✅ | — | Target environment. Must be in `environments`. |
+| `environments` | | `["dev","staging","prod"]` | Ordered JSON array. Last entry = production. |
+| `prerelease-identifiers` | | `{"dev":"dev","staging":"rc"}` | JSON map of env → prerelease token |
+| `tag-prefix` | | `v` | Git tag prefix |
+
+### Auth
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `github-token` | ✅ | — | GitHub token for git push and releases. Use `secrets.GITHUB_TOKEN`. |
+| `app-id` | | `''` | GitHub App ID. Generates a short-lived token to bypass branch protection. |
+| `app-private-key` | | `''` | GitHub App private key (PEM). Required when `app-id` is set. |
+
+### Behaviour
+
+| Input | Default | Description |
+|---|---|---|
+| `working-directory` | `.` | Directory containing the versioning config file |
+| `create-release` | `true` | Create a GitHub Release |
+| `changelog` | `true` | Update CHANGELOG.md |
+
+### Tool-specific
+
+| Input | Default | For tool |
+|---|---|---|
+| `gitversion-spec` | `6.x` | `gitversion` |
+| `gitversion-config` | `GitVersion.yml` | `gitversion` |
+| `release-please-release-type` | `simple` | `release-please` |
+| `release-please-config-file` | `release-please-config.json` | `release-please` |
+
+---
 
 ## Outputs
 
 | Output | Description |
 |---|---|
-| `url` | The URL of the deployed Cloud Run service |
-| `gar-image-with-tag` | The full GAR image reference that was deployed |
+| `version` | Semver string without prefix (e.g., `1.2.3` or `1.2.3-rc.1`) |
+| `tag` | Full git tag (e.g., `v1.2.3` or `v1.2.3-rc.1`) |
+| `is-prerelease` | `"true"` if this environment produces a prerelease |
+| `released` | `"true"` if a new version was created and published |
+| `prerelease-identifier` | The prerelease identifier (e.g., `rc`, `dev`). Empty for production. |
+| `resolved-environment` | The environment that was targeted |
 
-## IAM requirements
+---
 
-The service account referenced by `gcp-credentials` needs these roles on the GCP project:
+## Full tri-environment example
 
-| Role | Why |
+```yaml
+# .github/workflows/release.yaml
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'CHANGELOG.md']
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, prod]
+
+jobs:
+  release:
+    uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@v1
+    with:
+      versioning-tool: semantic-release-python
+      environment: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
+      environments: '["dev", "staging", "prod"]'
+      prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
+    secrets: inherit
+```
+
+Caller workflow examples for all environment profiles are in [`examples/`](examples/).
+
+---
+
+## Using outputs downstream
+
+```yaml
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tbd.outputs.version }}
+      tag:     ${{ steps.tbd.outputs.tag }}
+    steps:
+      - uses: calebsargeant/tbd-release@v1
+        id: tbd
+        with:
+          versioning-tool: semantic-release-python
+          environment:     dev
+          github-token:    ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: release
+    if: needs.release.outputs.version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - run: docker build -t my-app:${{ needs.release.outputs.version }} .
+```
+
+---
+
+## GitHub App setup (recommended for branch protection)
+
+When `main` is protected, `GITHUB_TOKEN` cannot push release commits. Use a GitHub App token instead:
+
+1. Create a GitHub App (Settings → Developer settings → GitHub Apps → New App)
+   - Permissions: **Contents: Read and write**, **Metadata: Read**
+2. Install the app on your repositories
+3. Note the App ID and generate a private key
+4. Add two repo secrets:
+   - `SEMANTIC_RELEASE_APP_ID` — the numeric App ID
+   - `SEMANTIC_RELEASE_APP_PRIVATE_KEY` — the full `.pem` file contents
+5. Pass them to the action via `app-id` and `app-private-key`
+
+---
+
+## What's included in this repository
+
+| Path | Purpose |
 |---|---|
-| `roles/run.admin` | Create and update Cloud Run services |
-| `roles/artifactregistry.writer` | Push the mirrored image to GAR |
-| `roles/iam.serviceAccountUser` | Act as the Cloud Run service's runtime service account |
+| [`action.yml`](action.yml) | **This marketplace action** — generic TBD versioning |
+| [`.github/workflows/tbd-ci.yaml`](.github/workflows/tbd-ci.yaml) | Reusable: PR image build with TBD branch name enforcement |
+| [`.github/workflows/tbd-release.yaml`](.github/workflows/tbd-release.yaml) | Reusable: wraps this action for use as a workflow_call target |
+| [`.github/workflows/tbd-deploy-cloud-run.yaml`](.github/workflows/tbd-deploy-cloud-run.yaml) | Reusable: image promotion + Cloud Run deployment (optional) |
+| [`.github/actions/cloud-run-deploy/`](.github/actions/cloud-run-deploy/) | Sub-action: GHCR → GAR mirror + `gcloud run deploy` |
+| [`examples/`](examples/) | Caller workflow examples for dual/tri/quad environments |
+| [`examples/config/`](examples/config/) | Config file templates for each versioning tool |
 
-```bash
-gcloud projects add-iam-policy-binding MY_PROJECT \
-  --member="serviceAccount:github-deploy@MY_PROJECT.iam.gserviceaccount.com" \
-  --role="roles/run.admin"
-
-gcloud projects add-iam-policy-binding MY_PROJECT \
-  --member="serviceAccount:github-deploy@MY_PROJECT.iam.gserviceaccount.com" \
-  --role="roles/artifactregistry.writer"
-
-gcloud projects add-iam-policy-binding MY_PROJECT \
-  --member="serviceAccount:github-deploy@MY_PROJECT.iam.gserviceaccount.com" \
-  --role="roles/iam.serviceAccountUser"
-```
-
-## Prerequisites
-
-**1. GAR repository must exist**
-
-```bash
-gcloud artifacts repositories create my-repo \
-  --repository-format=docker \
-  --location=africa-south1 \
-  --project=my-gcp-project
-```
-
-**2. GHCR packages visibility**
-
-This action pulls using `GITHUB_TOKEN`. If your GHCR packages are private, the token must have `read:packages` scope — the default `GITHUB_TOKEN` in a workflow job already has this for packages in the same org/user. No extra configuration needed.
-
-**3. GitHub Environment (recommended)**
-
-Create a `production` environment with required reviewers in your repo's **Settings → Environments**. Add `environment: production` to the calling job to enforce the approval gate.
-
-## Where this fits in the TBD pipeline
-
-```
-PR opened
-  └─► CI builds image → ghcr.io/org/my-app:pr-42
-
-PR merged to main
-  └─► semantic-release → GitHub Release v1.2.3
-
-Release published
-  └─► Retag pr-42 → v1.2.3 in GHCR
-  └─► calebsargeant/tbd-release@v1  ← this action
-        ├─ mirror v1.2.3 GHCR → GAR
-        └─ gcloud run deploy from GAR
-```
-
-The full TBD pipeline (CI build, semantic versioning, image promotion, multi-environment deployment) is available as reusable workflows in this repository:
-- `.github/workflows/tbd-ci.yaml` — PR image build with TBD branch name enforcement
-- `.github/workflows/tbd-release.yaml` — semantic-release wrapper
-- `.github/workflows/tbd-deploy-cloud-run.yaml` — orchestrates promotion + this action
+---
 
 ## License
 

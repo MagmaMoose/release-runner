@@ -1,0 +1,36 @@
+# Quad-environment TBD release workflow
+# Copy to: .github/workflows/release.yaml in your application repo
+#
+# Environment model:   dev  →  tst  →  acc  →  prd
+# Version tag model:   v1.2.3-dev.1  →  v1.2.3-alpha.1  →  v1.2.3-beta.1  →  v1.2.3
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
+      - 'CHANGELOG.md'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Promote to environment'
+        required: true
+        type: choice
+        options:
+          - tst
+          - acc
+          - prd
+
+jobs:
+  release:
+    uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@main
+    with:
+      versioning-tool: semantic-release-python
+      environment: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
+      environments: '["dev", "tst", "acc", "prd"]'
+      prerelease-identifiers: '{"dev": "dev", "tst": "alpha", "acc": "beta"}'
+    secrets: inherit
