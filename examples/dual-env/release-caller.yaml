@@ -1,0 +1,25 @@
+# Dual-environment TBD example: release workflow
+# Copy to: .github/workflows/release.yaml in your application repo
+#
+# Triggered on push to main. Runs python-semantic-release to calculate the next
+# version from conventional commits and creates a GitHub Release. That release
+# event triggers deploy-caller.yaml.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
+      - 'CHANGELOG.md'
+
+jobs:
+  release:
+    uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@main
+    with:
+      python_version: '3.11'
+      working_directory: '.'
+    secrets: inherit

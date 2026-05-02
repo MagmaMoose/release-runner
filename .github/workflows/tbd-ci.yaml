@@ -1,0 +1,106 @@
+name: TBD CI — Build and Push PR Image
+
+# Reusable workflow: validates TBD branch naming, then builds and pushes a
+# container image tagged pr-<number> to GHCR. Call this from your repo's CI
+# workflow on pull_request events targeting main.
+#
+# Wraps calebsargeant/reusable-workflows docker-ci.yaml and adds branch
+# name enforcement so repos only accept feat/*, fix/*, chore/*, hotfix/*,
+# docs/*, refactor/*, perf/*, test/*, ci/*, style/* branches.
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        description: 'Docker image name without registry prefix (e.g., my-app or my-app-api)'
+        required: true
+        type: string
+      bake_file:
+        description: 'Path to docker-bake.hcl file'
+        required: false
+        type: string
+        default: 'docker-bake.hcl'
+      bake_target:
+        description: 'Docker Bake target to build (must match a target in bake_file)'
+        required: false
+        type: string
+        default: 'default'
+      platforms:
+        description: 'Target platforms (comma-separated). Use linux/amd64 for Cloud Run.'
+        required: false
+        type: string
+        default: 'linux/amd64'
+      runner:
+        description: 'GitHub Actions runner label'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      enforce_branch_naming:
+        description: >
+          Enforce TBD branch naming convention.
+          Allowed prefixes: feat, fix, chore, hotfix, docs, refactor, perf, test, ci, style.
+        required: false
+        type: boolean
+        default: true
+      container_paths:
+        description: >
+          Multiline glob patterns (one per line) that trigger a container build.
+          Leave empty to use the default set from docker-ci.yaml (all common
+          source file types and lock files).
+        required: false
+        type: string
+        default: ''
+    outputs:
+      version:
+        description: 'Image tag that was built (pr-<number>). Empty if build was skipped.'
+        value: ${{ jobs.build.outputs.version }}
+      image:
+        description: 'Full image name without tag (e.g., ghcr.io/org/my-app).'
+        value: ${{ jobs.build.outputs.image }}
+      image_with_tag:
+        description: 'Full image reference including tag.'
+        value: ${{ jobs.build.outputs.image_with_tag }}
+      build_skipped:
+        description: '"true" when no container-related files changed.'
+        value: ${{ jobs.build.outputs.build_skipped }}
+    secrets:
+      registry_password:
+        description: 'GHCR password (defaults to GITHUB_TOKEN via secrets: inherit)'
+        required: false
+
+jobs:
+  validate-branch:
+    name: Validate TBD Branch Name
+    if: inputs.enforce_branch_naming && github.event_name == 'pull_request'
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - name: Check branch naming convention
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          echo "Branch: ${BRANCH}"
+
+          ALLOWED='^(feat|fix|chore|hotfix|docs|refactor|perf|test|ci|style)/'
+          if echo "${BRANCH}" | grep -qE "${ALLOWED}"; then
+            echo "✓ Branch '${BRANCH}' follows TBD naming convention."
+          else
+            echo "::error::Branch '${BRANCH}' does not follow the TBD naming convention."
+            echo "::error::Required format: <type>/<short-description>"
+            echo "::error::Allowed types: feat, fix, chore, hotfix, docs, refactor, perf, test, ci, style"
+            echo "::error::Examples: feat/add-oauth, fix/null-pointer, chore/update-deps"
+            exit 1
+          fi
+
+  build:
+    name: Build Image (${{ inputs.image_name }})
+    needs: validate-branch
+    if: always() && (needs.validate-branch.result == 'success' || needs.validate-branch.result == 'skipped')
+    uses: calebsargeant/reusable-workflows/.github/workflows/docker-ci.yaml@main
+    with:
+      image_name: ${{ inputs.image_name }}
+      bake_file: ${{ inputs.bake_file }}
+      bake_target: ${{ inputs.bake_target }}
+      platforms: ${{ inputs.platforms }}
+      runner: ${{ inputs.runner }}
+      container_paths: ${{ inputs.container_paths }}
+    secrets:
+      registry_password: ${{ secrets.registry_password }}

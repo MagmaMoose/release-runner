@@ -1,0 +1,183 @@
+name: TBD Deploy — Google Cloud Run
+
+# Reusable workflow: on a GitHub Release event, promotes the GHCR PR image to
+# the release version tag, mirrors it to Google Artifact Registry, then deploys
+# to Cloud Run. Caller triggers this on release: [published].
+#
+# Two-phase execution:
+#   1. promote  — retags pr-<N> image in GHCR to the release version (no rebuild)
+#   2. deploy   — mirrors GHCR image to GAR, runs gcloud run deploy
+#
+# Why mirror to GAR? Cloud Run (fully managed) cannot pull directly from private
+# GHCR. GAR is in the same GCP project so the Cloud Run service account already
+# has access. GHCR remains the canonical registry for the TBD pipeline.
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        description: 'Docker image name (without registry prefix). Must match what was used in tbd-ci.'
+        required: true
+        type: string
+      bake_file:
+        description: 'Path to docker-bake.hcl'
+        required: false
+        type: string
+        default: 'docker-bake.hcl'
+      bake_target:
+        description: 'Docker Bake target. Must match what was used in tbd-ci.'
+        required: false
+        type: string
+        default: 'default'
+      service:
+        description: 'Cloud Run service name'
+        required: true
+        type: string
+      project_id:
+        description: 'GCP project ID'
+        required: true
+        type: string
+      region:
+        description: 'GCP region'
+        required: false
+        type: string
+        default: 'africa-south1'
+      gar_image:
+        description: >
+          Full GAR image path WITHOUT tag.
+          Format: <region>-docker.pkg.dev/<project>/<repository>/<image-name>
+          Example: africa-south1-docker.pkg.dev/my-project/my-repo/api
+        required: true
+        type: string
+      port:
+        description: 'Container port'
+        required: false
+        type: string
+        default: '8080'
+      cpu:
+        description: 'CPU allocation'
+        required: false
+        type: string
+        default: '1'
+      memory:
+        description: 'Memory allocation'
+        required: false
+        type: string
+        default: '512Mi'
+      min_instances:
+        description: 'Minimum instances (0 = scale to zero)'
+        required: false
+        type: string
+        default: '0'
+      max_instances:
+        description: 'Maximum instances'
+        required: false
+        type: string
+        default: '10'
+      concurrency:
+        description: 'Max concurrent requests per instance'
+        required: false
+        type: string
+        default: '80'
+      timeout:
+        description: 'Request timeout (seconds)'
+        required: false
+        type: string
+        default: '300'
+      allow_unauthenticated:
+        description: 'Allow unauthenticated (public) requests'
+        required: false
+        type: boolean
+        default: true
+      service_account:
+        description: 'Service account email for the Cloud Run service identity'
+        required: false
+        type: string
+        default: ''
+      env_vars:
+        description: 'Environment variables as KEY=VALUE,KEY2=VALUE2'
+        required: false
+        type: string
+        default: ''
+      gcloud_secrets:
+        description: 'Secret Manager bindings as KEY=SECRET_NAME:VERSION,KEY2=SECRET2:latest'
+        required: false
+        type: string
+        default: ''
+      runner:
+        description: 'GitHub Actions runner label'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      version_branch_mapping:
+        description: >
+          JSON object mapping branches to version types for image promotion.
+          For a single-trunk TBD setup: {"main": {"type": "stable"}}
+          For tri-env: {"main": {"type": "stable"}, "staging": {"type": "prerelease", "identifier": "rc"}}
+        required: false
+        type: string
+        default: '{"main": {"type": "stable"}}'
+    outputs:
+      url:
+        description: 'Deployed Cloud Run service URL'
+        value: ${{ jobs.deploy.outputs.url }}
+      version:
+        description: 'The semver version that was promoted and deployed'
+        value: ${{ jobs.promote.outputs.version }}
+      image_with_tag:
+        description: 'The promoted GHCR image reference (registry/org/image:version)'
+        value: ${{ jobs.promote.outputs.image_with_tag }}
+    secrets:
+      GCP_CREDENTIALS:
+        description: 'GCP service account credentials JSON'
+        required: true
+
+jobs:
+  promote:
+    name: Promote PR Image → Release Tag
+    uses: calebsargeant/reusable-workflows/.github/workflows/docker-release.yaml@main
+    with:
+      image_name: ${{ inputs.image_name }}
+      bake_file: ${{ inputs.bake_file }}
+      bake_target: ${{ inputs.bake_target }}
+      auto_promote_on_release: true
+      version_branch_mapping: ${{ inputs.version_branch_mapping }}
+      runner: ${{ inputs.runner }}
+    secrets: inherit
+
+  deploy:
+    name: Deploy to Cloud Run
+    needs: promote
+    runs-on: ${{ inputs.runner }}
+    outputs:
+      url: ${{ steps.deploy-action.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy (${{ inputs.image_name }} → ${{ inputs.service }})
+        id: deploy-action
+        uses: calebsargeant/tbd-release@main
+        with:
+          ghcr-token: ${{ secrets.GITHUB_TOKEN }}
+          gcp-credentials: ${{ secrets.GCP_CREDENTIALS }}
+          ghcr-image: ${{ needs.promote.outputs.image_with_tag }}
+          service: ${{ inputs.service }}
+          project-id: ${{ inputs.project_id }}
+          region: ${{ inputs.region }}
+          gar-image: ${{ inputs.gar_image }}
+          port: ${{ inputs.port }}
+          cpu: ${{ inputs.cpu }}
+          memory: ${{ inputs.memory }}
+          min-instances: ${{ inputs.min_instances }}
+          max-instances: ${{ inputs.max_instances }}
+          concurrency: ${{ inputs.concurrency }}
+          timeout: ${{ inputs.timeout }}
+          allow-unauthenticated: ${{ inputs.allow_unauthenticated }}
+          service-account: ${{ inputs.service_account }}
+          env-vars: ${{ inputs.env_vars }}
+          gcloud-secrets: ${{ inputs.gcloud_secrets }}

@@ -1,0 +1,37 @@
+# Dual-environment TBD example: deploy workflow
+# Copy to: .github/workflows/deploy.yaml in your application repo
+#
+# Triggered when a GitHub Release is published (by release-caller.yaml → semantic-release).
+# Promotes the pr-<N> GHCR image to the release version tag, mirrors it to GAR,
+# then deploys to Cloud Run.
+
+name: Deploy
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  deploy:
+    uses: calebsargeant/tbd-release/.github/workflows/tbd-deploy-cloud-run.yaml@main
+    with:
+      image_name: my-app
+      bake_file: docker-bake.hcl
+      bake_target: default
+      service: my-app-api
+      project_id: my-gcp-project
+      region: africa-south1
+      gar_image: africa-south1-docker.pkg.dev/my-gcp-project/my-repo/api
+      port: '8080'
+      cpu: '1'
+      memory: '512Mi'
+      min_instances: '0'
+      max_instances: '10'
+      concurrency: '80'
+      timeout: '300'
+      allow_unauthenticated: true
+      service_account: 'my-app@my-gcp-project.iam.gserviceaccount.com'
+      env_vars: 'ENVIRONMENT=prod,PORT=8080'
+      gcloud_secrets: 'DATABASE_URL=database-url:latest,SECRET_KEY=django-secret-key:latest'
+      version_branch_mapping: '{"main": {"type": "stable"}}'
+    secrets: inherit

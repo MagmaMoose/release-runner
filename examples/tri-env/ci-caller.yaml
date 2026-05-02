@@ -1,0 +1,31 @@
+# Tri-environment TBD example: dev+tst → staging (rc) → prod
+#
+# Copy to: .github/workflows/ci.yaml in your application repo
+# Environments: dev+tst (automated), staging (gated, rc tag), prod (gated, stable tag)
+#
+# Tag format:
+#   dev+tst:  pr-<N>         (built on every PR)
+#   staging:  v1.2.3-rc.1    (promoted when staging gate opens)
+#   prod:     v1.2.3         (promoted when prod gate opens)
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@main
+    with:
+      image_name: my-app
+      bake_file: docker-bake.hcl
+      bake_target: default
+      platforms: linux/amd64
+      enforce_branch_naming: true
+    secrets: inherit

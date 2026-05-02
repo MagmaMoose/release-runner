@@ -1,0 +1,23 @@
+name: Release
+
+# Versions the tbd-release action itself using semantic-release.
+# Creates GitHub Releases (v1.0.0, v1.1.0, etc.) that callers pin to.
+# Major version tags (v1, v2) are expected to be maintained manually via
+# `git tag -f v1 v1.x.x && git push --force origin v1` after each release.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
+
+jobs:
+  release:
+    uses: calebsargeant/reusable-workflows/.github/workflows/semantic-release.yaml@main
+    with:
+      python_version: '3.11'
+      working_directory: '.'
+    secrets: inherit

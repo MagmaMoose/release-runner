@@ -1,0 +1,64 @@
+name: TBD Release — Semantic Versioning
+
+# Reusable workflow: runs python-semantic-release on push to main, calculating
+# the next semver from conventional commits and creating a GitHub Release.
+# The release event then triggers your deploy workflow.
+#
+# Requires the caller repo to have:
+#   - A pyproject.toml with [tool.semantic_release] config
+#   - Either SEMANTIC_RELEASE_APP_ID + SEMANTIC_RELEASE_APP_PRIVATE_KEY secrets
+#     (recommended — allows bypassing branch protection on the release commit),
+#     or a SEMANTIC_RELEASE_TOKEN PAT.
+#
+# See calebsargeant/reusable-workflows for GitHub App setup instructions.
+
+on:
+  workflow_call:
+    inputs:
+      python_version:
+        description: 'Python version for semantic-release'
+        required: false
+        type: string
+        default: '3.11'
+      working_directory:
+        description: 'Directory containing pyproject.toml (relative to repo root)'
+        required: false
+        type: string
+        default: '.'
+      fetch_depth:
+        description: 'Git fetch depth. 0 = full history (required for accurate semver).'
+        required: false
+        type: number
+        default: 0
+    outputs:
+      version:
+        description: 'The new release version (e.g., 1.2.3). Empty if no release was made.'
+        value: ${{ jobs.semantic-release.outputs.version }}
+      released:
+        description: '"true" if a new release was published.'
+        value: ${{ jobs.semantic-release.outputs.released }}
+      tag:
+        description: 'The git tag created (e.g., v1.2.3).'
+        value: ${{ jobs.semantic-release.outputs.tag }}
+    secrets:
+      SEMANTIC_RELEASE_APP_ID:
+        description: 'GitHub App ID for bypassing branch protection'
+        required: false
+      SEMANTIC_RELEASE_APP_PRIVATE_KEY:
+        description: 'GitHub App private key'
+        required: false
+      SEMANTIC_RELEASE_TOKEN:
+        description: 'PAT fallback (if not using GitHub App)'
+        required: false
+
+jobs:
+  semantic-release:
+    uses: calebsargeant/reusable-workflows/.github/workflows/semantic-release.yaml@main
+    with:
+      python_version: ${{ inputs.python_version }}
+      working_directory: ${{ inputs.working_directory }}
+      fetch_depth: ${{ inputs.fetch_depth }}
+    secrets:
+      SEMANTIC_RELEASE_APP_ID: ${{ secrets.SEMANTIC_RELEASE_APP_ID }}
+      SEMANTIC_RELEASE_APP_PRIVATE_KEY: ${{ secrets.SEMANTIC_RELEASE_APP_PRIVATE_KEY }}
+      SEMANTIC_RELEASE_TOKEN: ${{ secrets.SEMANTIC_RELEASE_TOKEN }}
