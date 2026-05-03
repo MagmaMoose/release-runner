@@ -2,7 +2,7 @@
 
 A GitHub Marketplace action for semantic release management with built-in Docker image promotion.
 
-Supports **Trunk-Based Development** (single `main` branch) and **branch-based** (GitFlow-esque) pipelines. Calculates the correct semantic version for any environment, then promotes the GHCR image built during CI to the new version tag — no rebuilds.
+Supports **Trunk-Based Development** (single `main` branch) and **Branch-Based Development** (one branch per environment) pipelines. Calculates the correct semantic version for any environment, then retags the GHCR image built during CI — no rebuilds for TBD, fresh builds per environment for BBD.
 
 ---
 
@@ -24,18 +24,21 @@ main (trunk)
   └─────────────────────► v1.2.3             Image: v1.2.3-rc.1 → v1.2.3 + :latest
 
 
-── Branch-Based (GitFlow-esque) ───────────────────────────────────────────────
+── Branch-Based Development (BBD) ─────────────────────────────────────────────
 
-feat/*  ──► dev   →  v1.2.3-dev.1    Image: pr-N → v1.2.3-dev.1
-                │
-                ▼
-            staging  →  v1.2.3-rc.1  Image: v1.2.3-dev.1 → v1.2.3-rc.1
-                │
-                ▼
-             main    →  v1.2.3       Image: v1.2.3-rc.1 → v1.2.3 + :latest
+feat/* ─PR→ dev     → v1.2.3-dev.1    Build on PR: pr-N → v1.2.3-dev.1
+               │
+              PR
+               │
+            staging → v1.2.3-rc.1    Rebuild on PR: pr-N → v1.2.3-rc.1
+               │
+              PR
+               │
+             main   → v1.2.3         Rebuild on PR: pr-N → v1.2.3 + :latest
 ```
 
-One image, built once on PR. Version tag is the promotion mechanism.
+For TBD, the image is built once on the feature PR and promoted by retagging through each environment.
+For BBD, the image is rebuilt on each environment's PR so it can be tested against environment-specific config before release.
 The last environment in your `environments` array always produces a stable semver tag.
 
 ---
@@ -45,35 +48,40 @@ The last environment in your `environments` array always produces a stable semve
 ### TBD (single trunk)
 
 ```yaml
-# .github/workflows/ci.yaml  — builds image on every PR
+# .github/workflows/ci.yaml  — builds image on every PR to main
 - uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@v1
   with:
-    image_name: my-app
+    image_name:  my-app
     bake_target: default
 
-# .github/workflows/release.yaml  — versions + promotes image on merge/dispatch
+# .github/workflows/release.yaml  — versions + promotes image on merge or promote/* PR
 - uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@v1
   with:
-    versioning-tool: semantic-release-python
-    environment:     ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
-    environments:    '["dev", "staging", "prod"]'
+    versioning-tool:        semantic-release-python
+    deployment-model:       tbd-pr
+    promote-branch-prefix:  promote
+    environment:            ${{ github.event_name == 'push' && 'dev' || '' }}
+    environments:           '["dev", "staging", "prod"]'
     prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-    images:          '[{"name": "my-app", "bake_target": "default"}]'
-    github-token:    ${{ secrets.GITHUB_TOKEN }}
+    image_name:             my-app
+    bake_file:              docker-bake.hcl
+    bake_target:            default
 ```
 
-### Branch-based (GitFlow-esque)
+### Branch-Based Development (BBD)
 
 ```yaml
 # .github/workflows/release.yaml  — one workflow, all branches
 - uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@v1
   with:
     versioning-tool:  semantic-release-python
-    deployment-model: branch-based
+    deployment-model: bbd
     branch-map:       '{"dev": "dev", "staging": "staging", "main": "prod"}'
     environments:     '["dev", "staging", "prod"]'
     prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-    images:           '[{"name": "my-app", "bake_target": "default"}]'
+    image_name:       my-app
+    bake_file:        docker-bake.hcl
+    bake_target:      default
 ```
 
 ---
@@ -82,43 +90,69 @@ The last environment in your `environments` array always produces a stable semve
 
 The full CI → release → promote flow:
 
+**TBD** — image built once, promoted by retagging:
+
 | Stage | Trigger | Versioning | Image action |
 |---|---|---|---|
-| **CI** | PR opened/updated | — | Build → push `pr-<N>` to GHCR |
-| **Dev release** | push to `main` (TBD) or push to `dev` (branch-based) | `v1.2.3-dev.1` | Retag `pr-<N>` → `v1.2.3-dev.1` |
-| **Staging release** | `workflow_dispatch` (TBD) or push to `staging` | `v1.2.3-rc.1` | Retag `v1.2.3-dev.1` → `v1.2.3-rc.1` |
-| **Prod release** | `workflow_dispatch` (TBD) or push to `main` | `v1.2.3` | Retag `v1.2.3-rc.1` → `v1.2.3` + `:latest` |
+| **CI** | PR opened/updated to `main` | — | Build → push `pr-<N>` to GHCR |
+| **Dev release** | PR merged to `main` | `v1.2.3-dev.1` | Retag `pr-<N>` → `v1.2.3-dev.1` |
+| **Staging release** | `promote/staging/*` PR merged to `main` | `v1.2.3-rc.1` | Retag `v1.2.3-dev.1` → `v1.2.3-rc.1` |
+| **Prod release** | `promote/prod/*` PR merged to `main` | `v1.2.3` | Retag `v1.2.3-rc.1` → `v1.2.3` + `:latest` |
 
-Image promotion uses `docker buildx imagetools create` — a manifest-level retag with no layer download.
-If the source image is not found (e.g., PR image expired or repo is new), a fresh `docker buildx bake` build is performed as a fallback.
+**BBD** — image rebuilt per environment:
+
+| Stage | Trigger | Versioning | Image action |
+|---|---|---|---|
+| **CI (dev)** | PR opened/updated to `dev` | — | Build → push `pr-<N>` to GHCR |
+| **Dev release** | PR merged to `dev` | `v1.2.3-dev.1` | Retag `pr-<N>` → `v1.2.3-dev.1` |
+| **CI (staging)** | PR opened/updated to `staging` | — | **Rebuild** → push `pr-<N>` to GHCR |
+| **Staging release** | PR merged to `staging` | `v1.2.3-rc.1` | Retag `pr-<N>` → `v1.2.3-rc.1` |
+| **CI (prod)** | PR opened/updated to `main` | — | **Rebuild** → push `pr-<N>` to GHCR |
+| **Prod release** | PR merged to `main` | `v1.2.3` | Retag `pr-<N>` → `v1.2.3` + `:latest` |
+
+TBD promotion uses `docker buildx imagetools create` — a manifest-level retag with no layer download.
+If the source image is not found (e.g., PR image expired), a fresh `docker buildx bake` build is performed as a fallback.
 
 ### Multi-image support
 
-Pass a JSON array to `images`. Each entry is promoted independently:
+Use a Docker Bake group target that contains all your images as sub-targets. Both `tbd-ci.yaml` and `tbd-release.yaml` accept a single `bake_target` — they run `docker buildx bake --print` to discover all sub-targets in the group and handle each one automatically.
 
-```yaml
-images: >-
-  [
-    {"name": "my-app-api",    "bake_target": "api"},
-    {"name": "my-app-worker", "bake_target": "worker"}
-  ]
+```hcl
+# docker-bake.hcl
+variable "REGISTRY"   { default = "ghcr.io" }
+variable "IMAGE_NAME" { default = "my-org/my-app" }
+variable "VERSION"    { default = "local" }
+
+target "api" {
+  tags = ["${REGISTRY}/${IMAGE_NAME}-api:${VERSION}"]
+}
+target "worker" {
+  tags = ["${REGISTRY}/${IMAGE_NAME}-worker:${VERSION}"]
+}
+group "default" {
+  targets = ["api", "worker"]
+}
 ```
 
-Images are published to `ghcr.io/{owner}/{name}:{version}`.
-
-In your CI workflow, call `tbd-ci.yaml` once per image (one build job per target):
+Pass `image_name: my-app` and `bake_target: default` — both workflows expand the group and operate on each target:
 
 ```yaml
-jobs:
-  build-api:
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@v1
-    with: {image_name: my-app-api, bake_target: api}
-    secrets: inherit
+# CI — one job builds all images in the group
+build:
+  uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@v1
+  with:
+    image_name:  my-app
+    bake_target: default   # builds api + worker in parallel
+  secrets: inherit
 
-  build-worker:
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@v1
-    with: {image_name: my-app-worker, bake_target: worker}
-    secrets: inherit
+# Release — discovers all targets, promotes each one independently
+release:
+  uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@v1
+  with:
+    image_name:  my-app
+    bake_file:   docker-bake.hcl
+    bake_target: default   # promotes ghcr.io/<owner>/my-app-api and my-app-worker
+  secrets: inherit
 ```
 
 ---
@@ -159,8 +193,8 @@ Example config files for each tool are in [`examples/config/`](examples/config/)
 | `environments` | | `["dev","staging","prod"]` | Ordered JSON array. Last entry = production. |
 | `prerelease-identifiers` | | `{"dev":"dev","staging":"rc"}` | JSON map of env → prerelease token |
 | `tag-prefix` | | `v` | Git tag prefix |
-| `deployment-model` | | `tbd` | `tbd` or `branch-based` |
-| `branch-map` | | `''` | JSON map of branch → env. Required for `branch-based`. |
+| `deployment-model` | | `tbd` | `tbd`, `tbd-pr`, or `bbd` |
+| `branch-map` | | `''` | JSON map of branch → env. Required for `bbd`. |
 
 ### Authentication
 
@@ -174,8 +208,9 @@ Example config files for each tool are in [`examples/config/`](examples/config/)
 
 | Input | Default | Description |
 |---|---|---|
-| `images` | `''` | JSON array of `{name, bake_target}` objects. When set, promotes GHCR images after release. |
+| `image_name` | `''` | Base image name (e.g. `my-app`). Sets `IMAGE_NAME=<owner>/my-app` when evaluating the bake file. Omit to skip image promotion. |
 | `bake_file` | `docker-bake.hcl` | Path to Docker Bake file |
+| `bake_target` | `default` | Bake target or group. Groups are expanded automatically — all sub-targets are promoted. |
 | `registry` | `ghcr.io` | Container registry |
 | `platforms` | `linux/amd64,linux/arm64` | Target platforms for fallback fresh builds |
 
@@ -207,7 +242,7 @@ Example config files for each tool are in [`examples/config/`](examples/config/)
 | `is-prerelease` | `"true"` if this environment produces a prerelease |
 | `released` | `"true"` if a new version was created and published |
 | `prerelease-identifier` | The prerelease identifier (e.g., `rc`, `dev`). Empty for production. |
-| `resolved-environment` | The environment that was targeted (useful for branch-based mode) |
+| `resolved-environment` | The environment that was targeted (useful for BBD and `tbd-pr` modes) |
 
 ---
 
@@ -220,19 +255,17 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  build-api:
+  build:
     uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@v1
     with:
-      image_name: my-app-api
-      bake_target: api
-      enforce_branch_naming: true
-    secrets: inherit
-  build-worker:
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@v1
-    with:
-      image_name: my-app-worker
-      bake_target: worker
+      image_name:  my-app
+      bake_file:   docker-bake.hcl
+      bake_target: default        # group containing api + worker sub-targets
+      platforms:   linux/amd64
       enforce_branch_naming: true
     secrets: inherit
 ```
@@ -243,52 +276,93 @@ name: Release
 on:
   push:
     branches: [main]
-    paths-ignore: ['**.md', 'CHANGELOG.md']
-  workflow_dispatch:
-    inputs:
-      environment:
-        type: choice
-        options: [staging, prod]
+    paths-ignore: ['**.md', '.gitignore', 'LICENSE', 'CHANGELOG.md']
+  pull_request:
+    types: [closed]
+    branches: [main]
 jobs:
   release:
+    if: |
+      github.event_name == 'push' ||
+      (
+        github.event.pull_request.merged == true &&
+        startsWith(github.head_ref, 'promote/')
+      )
     uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@v1
     with:
-      versioning-tool: semantic-release-python
-      environment: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
-      environments: '["dev", "staging", "prod"]'
-      prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-      images: >-
-        [
-          {"name": "my-app-api",    "bake_target": "api"},
-          {"name": "my-app-worker", "bake_target": "worker"}
-        ]
-      bake_file: docker-bake.hcl
+      versioning-tool:         semantic-release-python
+      deployment-model:        tbd-pr
+      promote-branch-prefix:   promote
+      environment:             ${{ github.event_name == 'push' && 'dev' || '' }}
+      environments:            '["dev", "staging", "prod"]'
+      prerelease-identifiers:  '{"dev": "dev", "staging": "rc"}'
+      image_name:              my-app
+      bake_file:               docker-bake.hcl
+      bake_target:             default
+    secrets: inherit
+
+  create-promotion-pr:
+    needs: release
+    if: needs.release.outputs.released == 'true' && needs.release.outputs.is-prerelease == 'true'
+    uses: calebsargeant/tbd-release/.github/workflows/tbd-promote.yaml@v1
+    with:
+      version:             ${{ needs.release.outputs.version }}
+      tag:                 ${{ needs.release.outputs.tag }}
+      current-environment: ${{ needs.release.outputs.resolved-environment }}
+      environments:        '["dev", "staging", "prod"]'
     secrets: inherit
 ```
 
+Flow: merge `feat/*` → dev release (`v1.2.3-dev.1`) → bot creates `promote/staging/1.2.3-dev.1` PR → team reviews → merge → staging release (`v1.2.3-rc.1`) → bot creates `promote/prod/1.2.3-rc.1` PR → merge → production release (`v1.2.3`).
+
 ---
 
-## Branch-based (GitFlow-esque) example
+## Branch-Based Development (BBD) example
+
+```yaml
+# .github/workflows/ci.yaml
+# Triggered on PRs to every env branch — CI rebuilds for each environment.
+name: CI
+on:
+  pull_request:
+    branches: [dev, staging, main]
+    types: [opened, synchronize, reopened]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@v1
+    with:
+      image_name:  my-app
+      bake_file:   docker-bake.hcl
+      bake_target: default
+      platforms:   linux/amd64
+      enforce_branch_naming: false  # BBD uses env branches, not feat/* prefixes
+    secrets: inherit
+```
 
 ```yaml
 # .github/workflows/release.yaml
 # Triggers on push to any branch in branch-map.
-# Environment is auto-detected — no workflow_dispatch inputs needed.
+# Environment is auto-detected from the branch — no dispatch inputs needed.
 name: Release
 on:
   push:
     branches: [dev, staging, main]
-    paths-ignore: ['**.md', 'CHANGELOG.md']
+    paths-ignore: ['**.md', '.gitignore', 'LICENSE', 'CHANGELOG.md']
 jobs:
   release:
     uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@v1
     with:
       versioning-tool:  semantic-release-python
-      deployment-model: branch-based
+      deployment-model: bbd
       branch-map:       '{"dev": "dev", "staging": "staging", "main": "prod"}'
       environments:     '["dev", "staging", "prod"]'
       prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-      images:           '[{"name": "my-app", "bake_target": "default"}]'
+      image_name:       my-app
+      bake_file:        docker-bake.hcl
+      bake_target:      default
     secrets: inherit
 ```
 
@@ -351,7 +425,7 @@ When `main` is protected, `GITHUB_TOKEN` cannot push release commits. Use a GitH
 | [`examples/tri-env/`](examples/tri-env/) | Tri-environment TBD caller examples (ci + release + deploy) |
 | [`examples/dual-env/`](examples/dual-env/) | Dual-environment TBD caller examples |
 | [`examples/quad-env/`](examples/quad-env/) | Quad-environment TBD caller examples |
-| [`examples/branch-based/`](examples/branch-based/) | Branch-based (GitFlow-esque) caller examples |
+| [`examples/bbd/`](examples/bbd/) | Branch-Based Development (BBD) caller examples |
 | [`examples/config/`](examples/config/) | Config file templates for each versioning tool |
 
 ---

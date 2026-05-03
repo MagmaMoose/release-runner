@@ -1,7 +1,7 @@
 name: TBD Release — Version & Publish
 
-# Reusable workflow: runs the calebsargeant/tbd-release action for a given
-# environment in the TBD (or branch-based) pipeline. Handles:
+# Reusable workflow: runs the calebsargeant/semantic-release action for a given
+# environment in the TBD (or bbd) pipeline. Handles:
 #   1. Version calculation + git tag + GitHub Release (via root action)
 #   2. Docker image promotion — retags GHCR images built during CI to the
 #      new semver tag. No rebuild unless the source image is missing.
@@ -19,7 +19,8 @@ name: TBD Release — Version & Publish
 #
 # Deployment models:
 #   tbd           Pass environment explicitly (default)
-#   branch-based  Environment auto-detected from branch name via branch-map
+#   bbd           Environment auto-detected from branch name via branch-map
+#   tbd-pr        Environment detected from promote/* PR head branch
 
 on:
   workflow_call:
@@ -37,7 +38,7 @@ on:
         description: |
           Target environment (must be in environments array).
           Required for deployment-model: tbd.
-          Omit for deployment-model: branch-based.
+          Omit for deployment-model: bbd or tbd-pr.
         required: false
         type: string
         default: ''
@@ -60,18 +61,24 @@ on:
       deployment-model:
         description: |
           tbd           (default) Pass environment explicitly.
-          branch-based  Auto-detect environment from branch name via branch-map.
+          bbd           Auto-detect environment from branch name via branch-map.
+          tbd-pr        Detect environment from promote/* PR head branch.
         required: false
         type: string
         default: 'tbd'
       branch-map:
         description: |
           JSON object mapping branch names → environment names.
-          Only used when deployment-model is branch-based.
+          Only used when deployment-model is bbd.
           Example: {"dev": "dev", "staging": "staging", "main": "prod"}
         required: false
         type: string
         default: ''
+      promote-branch-prefix:
+        description: 'Promotion branch prefix for tbd-pr deployment model (e.g., promote)'
+        required: false
+        type: string
+        default: 'promote'
 
       # ── Common tool options ────────────────────────────────────────────────
       working-directory:
@@ -88,41 +95,26 @@ on:
         default: true
 
       # ── Docker image promotion (optional) ──────────────────────────────────
-      images:
-        description: |
-          JSON array of GHCR images to promote after release.
-
-          Each entry must have:
-            name         Image name without registry/owner prefix (e.g. my-app-api)
-            bake_target  Docker Bake target that produces this image
-
-          Optional per entry:
-            bake_file    Override the top-level bake_file for this image
-
-          Examples:
-            Single image:
-              '[{"name": "my-app", "bake_target": "default"}]'
-
-            Multiple images (api + worker):
-              '[{"name": "my-app-api", "bake_target": "api"}, {"name": "my-app-worker", "bake_target": "worker"}]'
-
-          When omitted, only versioning is performed — no image promotion.
-          Images are published to: ghcr.io/{owner}/{name}:{version}
+      image_name:
+        description: 'Base image name (e.g., my-app). Sets IMAGE_NAME=<owner>/<image_name> when reading bake targets.'
         required: false
         type: string
         default: ''
       bake_file:
-        description: 'Default docker-bake.hcl path. Used when an image entry does not specify bake_file.'
+        description: 'docker-bake.hcl path'
         required: false
         type: string
         default: 'docker-bake.hcl'
+      bake_target:
+        description: 'Bake target or group to promote'
+        required: false
+        type: string
+        default: 'default'
       registry:
-        description: 'Container registry (default: ghcr.io)'
         required: false
         type: string
         default: 'ghcr.io'
       platforms:
-        description: 'Target platforms for fallback fresh builds (comma-separated)'
         required: false
         type: string
         default: 'linux/amd64,linux/arm64'
@@ -170,7 +162,7 @@ on:
         description: 'The prerelease identifier (e.g., dev, rc). Empty for production.'
         value: ${{ jobs.release.outputs.prerelease_identifier }}
       resolved-environment:
-        description: 'The environment that was targeted (useful for branch-based mode)'
+        description: 'The environment that was targeted (useful for bbd and tbd-pr modes)'
         value: ${{ jobs.release.outputs.resolved_environment }}
 
     secrets:
@@ -206,7 +198,7 @@ jobs:
     steps:
       - name: Run TBD Release
         id: tbd
-        uses: calebsargeant/tbd-release@main
+        uses: calebsargeant/semantic-release@main
         with:
           versioning-tool:             ${{ inputs.versioning-tool }}
           environment:                 ${{ inputs.environment }}
@@ -218,6 +210,7 @@ jobs:
           changelog:                   ${{ inputs.changelog }}
           deployment-model:            ${{ inputs.deployment-model }}
           branch-map:                  ${{ inputs.branch-map }}
+          promote-branch-prefix:       ${{ inputs.promote-branch-prefix }}
           github-token:                ${{ secrets.GITHUB_TOKEN_RELEASE || secrets.GITHUB_TOKEN }}
           app-id:                      ${{ secrets.SEMANTIC_RELEASE_APP_ID }}
           app-private-key:             ${{ secrets.SEMANTIC_RELEASE_APP_PRIVATE_KEY }}
@@ -227,20 +220,27 @@ jobs:
           release-please-config-file:  ${{ inputs.release-please-config-file }}
 
   # ── 2. Resolve image promotion strategy ────────────────────────────────────
-  # Runs only when a new version was released AND images are configured.
+  # Runs only when a new version was released AND image_name is configured.
   # Determines whether this is the first environment (→ find pr-N source)
   # or a subsequent environment (→ find previous version tag source).
+  # Also derives the image list from the bake file.
   setup-images:
     name: Resolve Image Promotion Strategy
     needs: release
-    if: needs.release.outputs.released == 'true' && inputs.images != ''
+    if: needs.release.outputs.released == 'true' && inputs.image_name != ''
     runs-on: ubuntu-latest
     outputs:
       images:              ${{ steps.resolve.outputs.images }}
       is_first_env:        ${{ steps.resolve.outputs.is_first_env }}
       prev_env_identifier: ${{ steps.resolve.outputs.prev_env_identifier }}
     steps:
-      - name: Resolve promotion strategy
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Resolve promotion strategy and image list
         id: resolve
         shell: bash
         run: |
@@ -249,27 +249,62 @@ jobs:
           ENV="${{ needs.release.outputs.resolved_environment }}"
           ENVS='${{ inputs.environments }}'
           IDS='${{ inputs.prerelease-identifiers }}'
+          DEPLOY_MODEL="${{ inputs.deployment-model }}"
 
-          # Pass the images array straight through to promote-images
-          echo "images=${{ inputs.images }}" >> "$GITHUB_OUTPUT"
+          echo "Deployment model: ${DEPLOY_MODEL}"
+          echo "Environments: ${ENVS}  |  Current: ${ENV}"
 
-          # Determine if this is the first env (needs pr-<N> lookup)
-          # or a subsequent env (needs previous version tag lookup)
-          FIRST_ENV=$(echo "${ENVS}" | jq -r '.[0]')
-          echo "Environments: ${ENVS}  |  First: ${FIRST_ENV}  |  Current: ${ENV}"
+          # Image promotion strategy differs by deployment model:
+          #
+          # TBD / TBD-PR:
+          #   First env (e.g. dev) → find pr-<N> built during CI, retag to v1.2.3-dev.1
+          #   Subsequent envs     → find previous semver tag (e.g. v1.2.3-dev.1), retag to v1.2.3-rc.1
+          #   (No rebuild — images flow forward unchanged through all envs)
+          #
+          # BBD (Branch-Based Development):
+          #   Every env has its own PR → CI rebuilds fresh for each env → tags pr-<N>
+          #   So every env looks for its own pr-<N> image (always "first env" strategy)
 
-          if [ "${ENV}" == "${FIRST_ENV}" ]; then
-            echo "Strategy: first environment → will look for pr-<N> image"
-            echo "is_first_env=true"       >> "$GITHUB_OUTPUT"
-            echo "prev_env_identifier="    >> "$GITHUB_OUTPUT"
+          if [ "${DEPLOY_MODEL}" == "bbd" ]; then
+            echo "BBD mode — every environment uses its own pr-<N> image (fresh build per env PR)"
+            echo "is_first_env=true"    >> "$GITHUB_OUTPUT"
+            echo "prev_env_identifier=" >> "$GITHUB_OUTPUT"
           else
-            ENV_INDEX=$(echo "${ENVS}" | jq -r --arg env "${ENV}" 'index($env)')
-            PREV_ENV=$(echo "${ENVS}" | jq -r --argjson idx "${ENV_INDEX}" '.[$idx - 1]')
-            PREV_IDENTIFIER=$(echo "${IDS}" | jq -r --arg e "${PREV_ENV}" '.[$e] // "dev"')
-            echo "Strategy: subsequent environment → will look for ${PREV_IDENTIFIER} version tag"
-            echo "is_first_env=false"                       >> "$GITHUB_OUTPUT"
-            echo "prev_env_identifier=${PREV_IDENTIFIER}"   >> "$GITHUB_OUTPUT"
+            # TBD / TBD-PR: first env looks for pr-N, subsequent envs retag from previous
+            FIRST_ENV=$(echo "${ENVS}" | jq -r '.[0]')
+            if [ "${ENV}" == "${FIRST_ENV}" ]; then
+              echo "TBD mode — first environment → will look for pr-<N> image"
+              echo "is_first_env=true"       >> "$GITHUB_OUTPUT"
+              echo "prev_env_identifier="    >> "$GITHUB_OUTPUT"
+            else
+              ENV_INDEX=$(echo "${ENVS}" | jq -r --arg env "${ENV}" 'index($env)')
+              PREV_ENV=$(echo "${ENVS}" | jq -r --argjson idx "${ENV_INDEX}" '.[$idx - 1]')
+              PREV_IDENTIFIER=$(echo "${IDS}" | jq -r --arg e "${PREV_ENV}" '.[$e] // "dev"')
+              echo "TBD mode — subsequent environment → will retag from ${PREV_IDENTIFIER} version tag"
+              echo "is_first_env=false"                       >> "$GITHUB_OUTPUT"
+              echo "prev_env_identifier=${PREV_IDENTIFIER}"   >> "$GITHUB_OUTPUT"
+            fi
           fi
+
+          # Set env vars so bake evaluates correctly
+          export REGISTRY="${{ inputs.registry }}"
+          export IMAGE_NAME="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')/${{ inputs.image_name }}"
+          export VERSION="_probe_"
+          export PLATFORMS="${{ inputs.platforms }}"
+
+          BAKE_OUTPUT=$(docker buildx bake \
+            -f "${{ inputs.bake_file }}" "${{ inputs.bake_target }}" \
+            --print 2>/dev/null)
+
+          # Build images JSON array: [{target: "api", image: "ghcr.io/org/my-app-api"}, ...]
+          IMAGES=$(echo "${BAKE_OUTPUT}" | jq -c '
+            .target | to_entries | map({
+              target: .key,
+              image: (.value.tags[0] // "" | split(":")[0])
+            }) | select(length > 0)
+          ')
+          echo "images=${IMAGES}" >> "$GITHUB_OUTPUT"
+          echo "Discovered images: ${IMAGES}"
 
   # ── 3. Promote (retag) or build each image ─────────────────────────────────
   # Matrix over the images array. For each image:
@@ -277,7 +312,7 @@ jobs:
   #   b) Retag source → new version tag  (no layer download — manifest copy)
   #   c) If source not found, fall back to a fresh docker buildx bake
   promote-images:
-    name: Promote ${{ matrix.image.name }}
+    name: Promote ${{ matrix.image.target }}
     needs: [release, setup-images]
     if: needs.setup-images.result == 'success'
     runs-on: ${{ inputs.runner }}
@@ -303,16 +338,12 @@ jobs:
           IS_FIRST_ENV:    ${{ needs.setup-images.outputs.is_first_env }}
           PREV_IDENTIFIER: ${{ needs.setup-images.outputs.prev_env_identifier }}
           NEW_TAG:         ${{ needs.release.outputs.tag }}
-          IMAGE_NAME:      ${{ matrix.image.name }}
-          REGISTRY:        ${{ inputs.registry }}
+          FULL_IMAGE:      ${{ matrix.image.image }}
           TAG_PREFIX:      ${{ inputs.tag-prefix }}
         with:
           script: |
             const isFirstEnv     = process.env.IS_FIRST_ENV === 'true';
-            const registry       = process.env.REGISTRY;
-            const owner          = context.repo.owner.toLowerCase();
-            const imageName      = process.env.IMAGE_NAME.toLowerCase();
-            const fullImage      = `${registry}/${owner}/${imageName}`;
+            const fullImage      = process.env.FULL_IMAGE;
             const newTag         = process.env.NEW_TAG;         // e.g. v1.2.3-rc.1
             const tagPrefix      = process.env.TAG_PREFIX || 'v';
             const prevIdentifier = process.env.PREV_IDENTIFIER; // e.g. dev
@@ -488,7 +519,7 @@ jobs:
 
           if [ -z "${SOURCE_DIGEST}" ]; then
             echo "promoted=false" >> "$GITHUB_OUTPUT"
-            echo "⚠️ Source image not found or inaccessible: ${SOURCE}"
+            echo "Source image not found or inaccessible: ${SOURCE}"
             echo "   Will perform fresh build"
             exit 0
           fi
@@ -502,12 +533,12 @@ jobs:
               --tag "${VERSION_TAG}" \
               --tag "${FULL_IMAGE}:latest" \
               "${SOURCE}"
-            echo "✓ Promoted to ${VERSION_TAG} and updated :latest"
+            echo "Promoted to ${VERSION_TAG} and updated :latest"
           else
             docker buildx imagetools create \
               --tag "${VERSION_TAG}" \
               "${SOURCE}"
-            echo "✓ Promoted to ${VERSION_TAG}"
+            echo "Promoted to ${VERSION_TAG}"
           fi
 
           echo "promoted=true" >> "$GITHUB_OUTPUT"
@@ -523,10 +554,10 @@ jobs:
           VERSION_TAG="${{ steps.source.outputs.target_version_tag }}"
           FULL_IMAGE="${{ steps.source.outputs.full_image }}"
           IS_PRERELEASE="${{ needs.release.outputs.is_prerelease }}"
-          BAKE_FILE="${{ matrix.image.bake_file || inputs.bake_file }}"
-          BAKE_TARGET="${{ matrix.image.bake_target }}"
+          BAKE_FILE="${{ inputs.bake_file }}"
+          BAKE_TARGET="${{ matrix.image.target }}"
 
-          echo "⚠️ Performing fresh build: ${FULL_IMAGE}"
+          echo "Performing fresh build: ${FULL_IMAGE}"
           echo "   Bake file:   ${BAKE_FILE}"
           echo "   Bake target: ${BAKE_TARGET}"
 
@@ -539,13 +570,14 @@ jobs:
             -f "${BAKE_FILE}" \
             "${BAKE_TARGET}" \
             "${TAGS[@]}" \
-            --set "*.cache-from=type=gha,scope=buildkit-${{ matrix.image.name }}" \
-            --set "*.cache-to=type=gha,mode=max,scope=buildkit-${{ matrix.image.name }}" \
+            --set "*.cache-from=type=gha,scope=buildkit-${{ matrix.image.target }}" \
+            --set "*.cache-to=type=gha,mode=max,scope=buildkit-${{ matrix.image.target }}" \
             --push
 
-          echo "✓ Fresh build complete: ${VERSION_TAG}"
+          echo "Fresh build complete: ${VERSION_TAG}"
         env:
           VERSION:    ${{ needs.release.outputs.version }}
           REGISTRY:   ${{ inputs.registry }}
-          IMAGE_NAME: ${{ github.repository_owner }}/${{ matrix.image.name }}
+          IMAGE_NAME: >-
+            ${{ format('{0}/{1}', github.repository_owner, inputs.image_name) }}
           PLATFORMS:  ${{ inputs.platforms }}

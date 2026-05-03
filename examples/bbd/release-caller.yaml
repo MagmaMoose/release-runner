@@ -1,0 +1,21 @@
+# Branch-Based Development (BBD) release workflow
+# Environment is auto-detected from the current branch via branch-map.
+# Push to any branch in branch-map triggers its environment's release.
+name: Release
+on:
+  push:
+    branches: [dev, staging, main]
+    paths-ignore: ['**.md', '.gitignore', 'LICENSE', 'CHANGELOG.md']
+jobs:
+  release:
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
+    with:
+      versioning-tool: semantic-release-python
+      deployment-model: bbd
+      branch-map: '{"dev": "dev", "staging": "staging", "main": "prod"}'
+      environments: '["dev", "staging", "prod"]'
+      prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
+      image_name: my-app
+      bake_file: docker-bake.hcl
+      bake_target: default
+    secrets: inherit
