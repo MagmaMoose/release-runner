@@ -189,14 +189,14 @@ runs:
     - name: Generate GitHub App token
       id: app-token
       if: inputs.app-id != '' && inputs.app-private-key != ''
-      uses: actions/create-github-app-token@v1
+      uses: actions/create-github-app-token@v3
       with:
         app-id: ${{ inputs.app-id }}
         private-key: ${{ inputs.app-private-key }}
 
     # ── 2. Checkout ─────────────────────────────────────────────────────────
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
         fetch-tags: true
@@ -288,7 +288,7 @@ runs:
     # ── 4b. semantic-release (npm) ──────────────────────────────────────────
     - name: Set up Node.js (for semantic-release-npm)
       if: inputs.versioning-tool == 'semantic-release-npm'
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: '20'
 
@@ -328,14 +328,14 @@ runs:
     # ── 4c. GitVersion ──────────────────────────────────────────────────────
     - name: Install GitVersion
       if: inputs.versioning-tool == 'gitversion'
-      uses: gittools/actions/gitversion/setup@v3
+      uses: gittools/actions/gitversion/setup@v4
       with:
         versionSpec: ${{ inputs.gitversion-spec }}
 
     - name: Execute GitVersion
       id: gitversion
       if: inputs.versioning-tool == 'gitversion'
-      uses: gittools/actions/gitversion/execute@v3
+      uses: gittools/actions/gitversion/execute@v4
       with:
         useConfigFile: true
         configFilePath: ${{ inputs.gitversion-config }}
@@ -398,7 +398,7 @@ runs:
     - name: Run release-please
       id: release-please
       if: inputs.versioning-tool == 'release-please'
-      uses: googleapis/release-please-action@v4
+      uses: googleapis/release-please-action@v5
       with:
         token: ${{ steps.app-token.outputs.token || inputs.github-token }}
         release-type: ${{ inputs.release-please-release-type }}
