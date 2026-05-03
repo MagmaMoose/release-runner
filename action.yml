@@ -28,25 +28,26 @@ inputs:
   auth-mode:
     description: |
       Token source for git/release operations. One of:
-        auto         (default) Use private-app when app-id/app-private-key are
-                     set, otherwise use github-token/GITHUB_TOKEN.
+        public-app   (default) Exchange GitHub Actions OIDC for a
+                     Release Runner token-broker token in release mode.
+        auto         Use private-app when app-id/app-private-key are set,
+                     otherwise use github-token/GITHUB_TOKEN.
         github-token Use github-token or the workflow GITHUB_TOKEN.
         private-app  Generate a token from app-id/app-private-key.
-        public-app   Exchange GitHub Actions OIDC for a token-broker token.
     required: false
-    default: 'auto'
+    default: 'public-app'
 
   token-broker-url:
     description: |
       HTTPS URL for the public GitHub App token broker.
-      Required when auth-mode is public-app.
+      Defaults to the public Release Runner broker.
     required: false
-    default: ''
+    default: 'https://release-runner.sargeant.workers.dev'
 
   oidc-audience:
     description: 'OIDC audience used for the public token broker.'
     required: false
-    default: 'semantic-release-token-broker'
+    default: 'release-runner'
 
   # ── Versioning tool ──────────────────────────────────────────────────────
   versioning-tool:
@@ -292,7 +293,7 @@ runs:
 
     - name: Request public GitHub App token
       id: public-app-token
-      if: inputs.auth-mode == 'public-app'
+      if: inputs.mode == 'release' && inputs.auth-mode == 'public-app'
       shell: bash
       env:
         TOKEN_BROKER_URL: ${{ inputs.token-broker-url }}
@@ -303,6 +304,7 @@ runs:
       id: auth
       shell: bash
       env:
+        ACTION_MODE: ${{ inputs.mode }}
         AUTH_MODE: ${{ inputs.auth-mode }}
         PRIVATE_APP_TOKEN: ${{ steps.app-token.outputs.token }}
         PUBLIC_APP_TOKEN: ${{ steps.public-app-token.outputs.token }}

@@ -3,7 +3,7 @@ import { handleRequest, type BrokerEnv } from "../src/index";
 const env: BrokerEnv = {
   GITHUB_APP_ID: "12345",
   GITHUB_APP_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----\\nsecret\\n-----END PRIVATE KEY-----",
-  OIDC_AUDIENCE: "semantic-release-token-broker"
+  OIDC_AUDIENCE: "release-runner"
 };
 
 function tokenRequest(body: Record<string, unknown>): Request {

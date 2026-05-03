@@ -1,5 +1,5 @@
 {
-  "name": "@calebsargeant/semantic-release-token-broker",
+  "name": "@calebsargeant/release-runner",
   "private": true,
   "type": "module",
   "scripts": {

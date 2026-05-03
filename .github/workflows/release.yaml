@@ -18,8 +18,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -30,4 +29,3 @@ jobs:
           environment: prod
           environments: '["prod"]'
           prerelease-identifiers: '{}'
-          github-token: ${{ secrets.GITHUB_TOKEN }}

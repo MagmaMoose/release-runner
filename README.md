@@ -4,7 +4,7 @@ A GitHub Marketplace action for semantic release management with built-in Docker
 
 Supports **Trunk-Based Development (TBD)** (single `main` branch) and **Branch-Based Development (BBD)** (one branch per environment) pipelines. Calculates the correct semantic version for any environment, then retags the GHCR image built during CI — no rebuilds for TBD, fresh builds per environment for BBD.
 
-Supports three authentication modes: the workflow `GITHUB_TOKEN`, a bring-your-own GitHub App, or a shared public GitHub App through the Cloudflare Worker token broker in [`worker/`](worker/).
+Supports three authentication modes: the workflow `GITHUB_TOKEN`, a bring-your-own GitHub App, or a shared public GitHub App through the Release Runner token broker (Cloudflare Worker) in [`worker/`](worker/).
 
 ---
 
@@ -91,9 +91,9 @@ jobs:
       )
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       packages: write
-      pull-requests: write
+      id-token: write
     steps:
       - uses: calebsargeant/semantic-release@v1
         with:
@@ -104,7 +104,6 @@ jobs:
           prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
           image_name: my-app
           create-promotion-pr: 'true'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ### Branch-Based Development (BBD)
@@ -143,8 +142,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       packages: write
+      id-token: write
     steps:
       - uses: calebsargeant/semantic-release@v1
         with:
@@ -154,7 +154,6 @@ jobs:
           environments: '["dev", "staging", "prod"]'
           prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
           image_name: my-app
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ---
@@ -242,7 +241,6 @@ steps:
       mode: release
       image_name:  my-app
       bake_target: default
-      github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ---
@@ -297,10 +295,10 @@ Example config files for each tool are in [`examples/config/`](examples/config/)
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `auth-mode` | | `auto` | `auto`, `github-token`, `private-app`, or `public-app` |
+| `auth-mode` | | `public-app` | `public-app`, `github-token`, `private-app`, or `auto` |
 | `github-token` | | workflow `GITHUB_TOKEN` | Token for default auth and GHCR login |
-| `token-broker-url` | (public app) | `''` | Cloudflare Worker URL for `auth-mode: public-app` |
-| `oidc-audience` | | `semantic-release-token-broker` | Audience used when requesting the GitHub Actions OIDC token |
+| `token-broker-url` | | `https://release-runner.sargeant.workers.dev` | Cloudflare Worker URL for `auth-mode: public-app` |
+| `oidc-audience` | | `release-runner` | Audience used when requesting the GitHub Actions OIDC token |
 | `app-id` | (private app) | `''` | GitHub App ID. Generates a short-lived token to bypass branch protection |
 | `app-private-key` | (private app) | `''` | GitHub App private key (PEM). Required when `app-id` is set |
 
@@ -404,9 +402,9 @@ jobs:
       )
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       packages: write
-      pull-requests: write
+      id-token: write
     steps:
       - uses: calebsargeant/semantic-release@v1
         with:
@@ -417,7 +415,6 @@ jobs:
           prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
           image_name: my-app
           create-promotion-pr: 'true'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 Flow: merge `feat/*` → dev release (`v1.2.3-dev.1`) → action creates `promote/staging/1.2.3-dev.1` PR → team reviews → merge → staging release (`v1.2.3-rc.1`) → action creates `promote/prod/1.2.3-rc.1` PR → merge → production release (`v1.2.3`).
@@ -463,8 +460,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       packages: write
+      id-token: write
     steps:
       - uses: calebsargeant/semantic-release@v1
         with:
@@ -474,7 +472,6 @@ jobs:
           environments: '["dev", "staging", "prod"]'
           prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
           image_name: my-app
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ---
@@ -485,6 +482,9 @@ jobs:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       version: ${{ steps.tbd.outputs.version }}
       tag:     ${{ steps.tbd.outputs.tag }}
@@ -496,7 +496,6 @@ jobs:
           environment: dev
           environments: '["dev", "prod"]'
           prerelease-identifiers: '{"dev": "dev"}'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
   deploy:
     needs: release
@@ -515,7 +514,7 @@ jobs:
 
 When `main` is protected, `GITHUB_TOKEN` often cannot push the release commit, tag, promotion branch, or promotion PR that release tooling creates. A GitHub App can be allowed through branch protection/rulesets without disabling those protections.
 
-A shared public GitHub App is possible, but it requires a hosted token broker because the shared app's private key must stay private. This repo includes a Cloudflare Worker broker in [`worker/`](worker/) for that purpose.
+A shared public GitHub App is possible, but it requires a hosted token broker because the shared app's private key must stay private. This repo includes the Release Runner Cloudflare Worker broker in [`worker/`](worker/) for that purpose.
 
 ### Option A: Shared public GitHub App (easiest)
 
@@ -532,10 +531,9 @@ steps:
   - uses: CalebSargeant/semantic-release@v1
     with:
       mode: release
-      auth-mode: public-app
-      token-broker-url: https://YOUR-WORKER.workers.dev
-      oidc-audience: semantic-release-token-broker
 ```
+
+`auth-mode: public-app` and `token-broker-url: https://release-runner.sargeant.workers.dev` are the defaults. Override them only when using `GITHUB_TOKEN`, a private app, or your own broker.
 
 How it works:
 
@@ -581,9 +579,9 @@ Use this when an organisation does not want to install a third-party shared app,
     github-token:    ${{ secrets.GITHUB_TOKEN }}
 ```
 
-### Deploying the token broker
+### Deploying Release Runner
 
-The broker is a Cloudflare Worker TypeScript package in [`worker/`](worker/). It accepts only `POST /token` and returns an installation token only after validating the GitHub Actions OIDC JWT.
+Release Runner is a Cloudflare Worker TypeScript package in [`worker/`](worker/). It accepts only `POST /token` and returns an installation token only after validating the GitHub Actions OIDC JWT.
 
 1. Create a public GitHub App with repository permissions:
    - **Contents:** Read and write
@@ -627,7 +625,7 @@ Keep the private key in Cloudflare Worker secrets only. Do not put it in `wrangl
 | [`.github/workflows/tbd-release.yaml`](.github/workflows/tbd-release.yaml) | Thin wrapper: `mode: release` at job level |
 | [`.github/workflows/tbd-promote.yaml`](.github/workflows/tbd-promote.yaml) | Legacy: create promotion PR for next environment (use `create-promotion-pr: 'true'` instead) |
 | [`.github/workflows/tbd-deploy-cloud-run.yaml`](.github/workflows/tbd-deploy-cloud-run.yaml) | Optional: image promotion + Cloud Run deployment |
-| [`worker/`](worker/) | Cloudflare Worker token broker for the shared public GitHub App auth mode |
+| [`worker/`](worker/) | Release Runner (Cloudflare Worker) token broker for the shared public GitHub App auth mode |
 | [`scripts/`](scripts/) | Shell helpers used by the composite action and test suite |
 | [`tests/`](tests/) | Bats and Docker Bake validation tests |
 | [`examples/solo/`](examples/solo/) | Solo (prod-only) caller example |

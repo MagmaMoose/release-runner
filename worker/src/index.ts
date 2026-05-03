@@ -10,7 +10,7 @@ const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const GITHUB_OIDC_JWKS_URL =
   "https://token.actions.githubusercontent.com/.well-known/jwks";
 const GITHUB_API_VERSION = "2022-11-28";
-const DEFAULT_AUDIENCE = "semantic-release-token-broker";
+const DEFAULT_AUDIENCE = "release-runner";
 const DEFAULT_PERMISSIONS: TokenPermissions = {
   contents: "write",
   pull_requests: "write"
@@ -297,7 +297,7 @@ function githubHeaders(appJwt: string): HeadersInit {
   return {
     accept: "application/vnd.github+json",
     authorization: `Bearer ${appJwt}`,
-    "user-agent": "calebsargeant-semantic-release-token-broker",
+    "user-agent": "calebsargeant-release-runner",
     "x-github-api-version": GITHUB_API_VERSION
   };
 }

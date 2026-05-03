@@ -7,16 +7,15 @@ name: TBD Release — Version & Promote
 #     release:
 #       runs-on: ubuntu-latest
 #       permissions:
-#         contents: write
+#         contents: read
 #         packages: write
-#         pull-requests: write
+#         id-token: write
 #       steps:
 #         - uses: calebsargeant/semantic-release@v1
 #           with:
 #             mode: release
 #             deployment-model: tbd-pr
 #             create-promotion-pr: 'true'
-#             github-token: ${{ secrets.GITHUB_TOKEN }}
 
 on:
   workflow_call:
@@ -32,15 +31,15 @@ on:
       auth-mode:
         required: false
         type: string
-        default: 'auto'
+        default: 'public-app'
       token-broker-url:
         required: false
         type: string
-        default: ''
+        default: 'https://release-runner.sargeant.workers.dev'
       oidc-audience:
         required: false
         type: string
-        default: 'semantic-release-token-broker'
+        default: 'release-runner'
 
       # ── Environment model ────────────────────────────────────────────────────
       environment:
@@ -184,9 +183,8 @@ jobs:
     name: Release (${{ inputs.environment || 'auto' }})
     runs-on: ${{ inputs.runner }}
     permissions:
-      contents: write
+      contents: read
       packages: write
-      pull-requests: write
       id-token: write
     outputs:
       version:              ${{ steps.tbd.outputs.version }}
