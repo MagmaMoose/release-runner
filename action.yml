@@ -1,9 +1,5 @@
-name: 'semantic-release'
-description: >
-  All-in-one semantic release management for TBD and BBD pipelines.
-  Handles Docker CI builds, versioning, image promotion, and promotion PR creation
-  from a single action. Supports python-semantic-release, semantic-release (npm),
-  GitVersion, and release-please.
+name: 'Release Runner'
+description: 'Semantic release orchestration for TBD/BBD pipelines with Docker image promotion and promotion PR automation.'
 
 branding:
   icon: 'git-branch'
