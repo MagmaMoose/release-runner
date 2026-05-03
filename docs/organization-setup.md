@@ -1,36 +1,65 @@
-# Organization setup
-This page covers one-time setup at organization level before onboarding repositories.
+# Organization Setup
 
-## 1) Pick an authentication mode
-Use one of these approaches:
+Do this once for an organization, then reuse the same decisions across repositories.
 
-- `public-app` (default): easiest onboarding, no app private key in consumer repositories
-- `private-app`: best for strict enterprise ownership and control
-- `github-token`: simplest, but may not bypass protected branch restrictions
+## Choose Authentication
 
-## 2) Configure branch protection/rulesets
-Whichever auth mode you choose, ensure the actor used by releases can:
+Release Runner needs a token for checkout, tags, GitHub Releases, promotion branches, and promotion PRs. Docker registry login still uses `github-token` or the workflow `GITHUB_TOKEN`.
 
-- push release commits/tags
-- create promotion branches
-- open promotion pull requests
+| Auth mode | Best fit | Required workflow permission |
+|---|---|---|
+| `public-app` | Default hosted app/broker flow; no private key in consumer repos | `id-token: write` |
+| `private-app` | Organization-owned GitHub App and private key | none beyond normal job permissions |
+| `github-token` | Simple repos where `GITHUB_TOKEN` can write releases/tags | none beyond normal job permissions |
+| `auto` | Mixed repos; prefer private app when secrets are configured | depends on selected token |
 
-For GitHub App modes, allow the app in relevant branch protection/rulesets.
+## Public App Mode
 
-## 3) Configure GitHub Actions defaults
-Ensure organization/repository settings allow workflows to:
+Use `auth-mode: public-app` when repositories can install the hosted Release Runner GitHub App.
 
-- create and approve pull requests (if your process needs this)
-- write contents when running release workflows
-- request OIDC tokens (`id-token: write`) when using `public-app`
+Checklist:
 
-## 4) If using `private-app`, prepare org/repo secrets
-Store:
+- Install the app on each repository that will release.
+- Grant release jobs `id-token: write`.
+- Keep the default `token-broker-url` unless you run your own broker.
+- Allow the app through branch protection or repository rulesets when releases need to push protected refs.
 
-- `SEMANTIC_RELEASE_APP_ID`
-- `SEMANTIC_RELEASE_APP_PRIVATE_KEY`
+Workflow shape:
 
-Then pass them in workflow inputs:
+```yaml
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+steps:
+  - uses: calebsargeant/semantic-release@v1
+    with:
+      mode: release
+```
+
+## Private App Mode
+
+Use `auth-mode: private-app` when your organization wants to own the GitHub App, private key, permissions, and installation lifecycle.
+
+Create a GitHub App with repository permissions:
+
+| Permission | Access |
+|---|---|
+| Contents | Read and write |
+| Pull requests | Read and write |
+| Metadata | Read-only |
+
+Add `Workflows: Read and write` only if your release process intentionally edits workflow files.
+
+Then:
+
+1. Install the app on target repositories.
+2. Save the app ID as `SEMANTIC_RELEASE_APP_ID`.
+3. Generate a private key and save the full PEM as `SEMANTIC_RELEASE_APP_PRIVATE_KEY`.
+4. Allow the app in any branch protection or rulesets that would otherwise block release writes.
+
+Workflow input:
 
 ```yaml
 - uses: calebsargeant/semantic-release@v1
@@ -41,5 +70,44 @@ Then pass them in workflow inputs:
     app-private-key: ${{ secrets.SEMANTIC_RELEASE_APP_PRIVATE_KEY }}
 ```
 
-## 5) If using `public-app`, install the app where needed
-Install the shared app (or your own public app) on all target repositories/org scopes before enabling release automation.
+## Workflow Token Mode
+
+Use `auth-mode: github-token` when the default workflow token is allowed to create the release commit, tag, GitHub Release, and any promotion PR branch.
+
+```yaml
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+steps:
+  - uses: calebsargeant/semantic-release@v1
+    with:
+      mode: release
+      auth-mode: github-token
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+This is the simplest mode, but it often fails in repositories with strict protected branches or rulesets.
+
+## Branch Protection And Rulesets
+
+Confirm the selected actor can perform the writes your workflow needs:
+
+- create and push tags
+- create GitHub Releases
+- push release commits when the versioning tool updates files
+- push `promote/<environment>/<version>` branches when `create-promotion-pr: 'true'`
+- open promotion pull requests
+
+If your rulesets require signed commits, linear history, status checks, or specific bypass actors, configure the selected GitHub App or token actor before enabling releases.
+
+## Package Permissions
+
+When `image_name` is set, CI and release jobs need package access:
+
+- `packages: write` for GHCR publish/promote
+- package visibility that allows the repository workflow to push
+- a Docker Bake file in the repository
+
+Version-only releases do not need package permissions.

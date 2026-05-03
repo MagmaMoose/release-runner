@@ -1,5 +1,5 @@
-site_name: Semantic Release System
-site_description: Consumer onboarding documentation for the semantic-release action and Release Runner.
+site_name: Release Runner
+site_description: Setup and reference documentation for calebsargeant/semantic-release@v1.
 repo_name: calebsargeant/semantic-release
 repo_url: https://github.com/calebsargeant/semantic-release
 theme:
@@ -13,10 +13,10 @@ markdown_extensions:
       permalink: true
 nav:
   - Home: index.md
-  - Onboarding:
-      - Organization setup: organization-setup.md
-      - Repository setup: repository-setup.md
+  - Setup:
+      - Organization: organization-setup.md
+      - Repository: repository-setup.md
   - Reference:
       - Action inputs and outputs: reference/action-inputs-outputs.md
-  - Release Runner:
-      - Worker setup: release-runner-worker.md
+  - Token Broker:
+      - Release Runner Worker: release-runner-worker.md
