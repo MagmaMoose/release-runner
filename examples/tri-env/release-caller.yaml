@@ -16,15 +16,11 @@ jobs:
       )
     uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
     with:
-      versioning-tool: semantic-release-python
       deployment-model: tbd-pr
-      promote-branch-prefix: promote
       environment: ${{ github.event_name == 'push' && 'dev' || '' }}
       environments: '["dev", "staging", "prod"]'
       prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
       image_name: my-app
-      bake_file: docker-bake.hcl
-      bake_target: default
     secrets: inherit
 
   create-promotion-pr:

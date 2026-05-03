@@ -1,5 +1,3 @@
-# Solo environment — every merge to main creates a stable release.
-# No prerelease environments. Simplest possible pipeline.
 name: Release
 on:
   push:
@@ -9,11 +7,8 @@ jobs:
   release:
     uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
     with:
-      versioning-tool: semantic-release-python
       environment: prod
       environments: '["prod"]'
       prerelease-identifiers: '{}'
       image_name: my-app
-      bake_file: docker-bake.hcl
-      bake_target: default
     secrets: inherit

@@ -2,7 +2,7 @@
 
 A GitHub Marketplace action for semantic release management with built-in Docker image promotion.
 
-Supports **Trunk-Based Development** (single `main` branch) and **Branch-Based Development** (one branch per environment) pipelines. Calculates the correct semantic version for any environment, then retags the GHCR image built during CI — no rebuilds for TBD, fresh builds per environment for BBD.
+Supports **Trunk-Based Development (TBD)** (single `main` branch) and **Branch-Based Development (BBD)** (one branch per environment) pipelines. Calculates the correct semantic version for any environment, then retags the GHCR image built during CI — no rebuilds for TBD, fresh builds per environment for BBD.
 
 ---
 
@@ -45,27 +45,22 @@ The last environment in your `environments` array always produces a stable semve
 
 ## Quick start
 
-### TBD (single trunk)
+### Trunk-Based Development (TBD)
 
 ```yaml
 # .github/workflows/ci.yaml  — builds image on every PR to main
 - uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
   with:
-    image_name:  my-app
-    bake_target: default
+    image_name: my-app
 
 # .github/workflows/release.yaml  — versions + promotes image on merge or promote/* PR
 - uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
   with:
-    versioning-tool:        semantic-release-python
-    deployment-model:       tbd-pr
-    promote-branch-prefix:  promote
-    environment:            ${{ github.event_name == 'push' && 'dev' || '' }}
-    environments:           '["dev", "staging", "prod"]'
+    deployment-model:  tbd-pr
+    environment:       ${{ github.event_name == 'push' && 'dev' || '' }}
+    environments:      '["dev", "staging", "prod"]'
     prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-    image_name:             my-app
-    bake_file:              docker-bake.hcl
-    bake_target:            default
+    image_name:        my-app
 ```
 
 ### Branch-Based Development (BBD)
@@ -74,14 +69,64 @@ The last environment in your `environments` array always produces a stable semve
 # .github/workflows/release.yaml  — one workflow, all branches
 - uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
   with:
-    versioning-tool:  semantic-release-python
     deployment-model: bbd
     branch-map:       '{"dev": "dev", "staging": "staging", "main": "prod"}'
     environments:     '["dev", "staging", "prod"]'
     prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
     image_name:       my-app
-    bake_file:        docker-bake.hcl
-    bake_target:      default
+```
+
+---
+
+## Architecture
+
+### `action.yml` — the Marketplace action (versioning engine)
+
+`calebsargeant/semantic-release@v1` is the root action published to the GitHub Marketplace. It handles only versioning: it reads your commit history, calculates the next semantic version, creates a git tag, and publishes a GitHub Release.
+
+Use it directly when you only need versioning and no Docker build or promote:
+
+```yaml
+- uses: calebsargeant/semantic-release@v1
+  with:
+    versioning-tool: semantic-release-python
+    environment:     dev
+    github-token:    ${{ secrets.GITHUB_TOKEN }}
+```
+
+### Reusable workflows — CI/CD pipeline on top
+
+The reusable workflows in `.github/workflows/` wrap the root action and add Docker build and promote:
+
+| Workflow | Purpose |
+|---|---|
+| `tbd-ci.yaml` | Builds and pushes the image (`pr-<N>`) on every PR |
+| `tbd-release.yaml` | Calls `calebsargeant/semantic-release@main` internally, then promotes the image to the new version tag |
+| `tbd-promote.yaml` | Creates the next environment's promotion PR after a release |
+| `tbd-deploy-cloud-run.yaml` | Optional: mirrors image to GAR and deploys to Cloud Run |
+
+Use the reusable workflows when you want the full Docker CI/CD pipeline (the common case):
+
+```yaml
+# ci.yaml
+jobs:
+  build:
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
+    with:
+      image_name: my-app
+    secrets: inherit
+
+# release.yaml
+jobs:
+  release:
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
+    with:
+      deployment-model: tbd-pr
+      environment: ${{ github.event_name == 'push' && 'dev' || '' }}
+      environments: '["dev", "staging", "prod"]'
+      prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
+      image_name: my-app
+    secrets: inherit
 ```
 
 ---
@@ -90,16 +135,18 @@ The last environment in your `environments` array always produces a stable semve
 
 The full CI → release → promote flow:
 
-**TBD** — image built once, promoted by retagging:
+**Trunk-Based Development (TBD)** — image built once, promoted by retagging:
 
 | Stage | Trigger | Versioning | Image action |
 |---|---|---|---|
-| **CI** | PR opened/updated to `main` | — | Build → push `pr-<N>` to GHCR |
-| **Dev release** | PR merged to `main` | `v1.2.3-dev.1` | Retag `pr-<N>` → `v1.2.3-dev.1` |
-| **Staging release** | `promote/staging/*` PR merged to `main` | `v1.2.3-rc.1` | Retag `v1.2.3-dev.1` → `v1.2.3-rc.1` |
-| **Prod release** | `promote/prod/*` PR merged to `main` | `v1.2.3` | Retag `v1.2.3-rc.1` → `v1.2.3` + `:latest` |
+| **Feature PR opened** | PR opened/updated to `main` | — | Build → push `pr-<N>` to GHCR |
+| **Dev release** | Feature PR merged to `main` | `v1.2.3-dev.1` | Retag `pr-<N>` → `v1.2.3-dev.1` |
+| **Staging promotion PR created** | Bot creates `promote/staging/*` PR | — | — |
+| **Staging release** | `promote/staging/*` PR reviewed and merged | `v1.2.3-rc.1` | Retag `v1.2.3-dev.1` → `v1.2.3-rc.1` |
+| **Prod promotion PR created** | Bot creates `promote/prod/*` PR | — | — |
+| **Prod release** | `promote/prod/*` PR reviewed and merged | `v1.2.3` | Retag `v1.2.3-rc.1` → `v1.2.3` + `:latest` |
 
-**BBD** — image rebuilt per environment:
+**Branch-Based Development (BBD)** — image rebuilt per environment:
 
 | Stage | Trigger | Versioning | Image action |
 |---|---|---|---|
@@ -252,7 +299,7 @@ Example config files for each tool are in [`examples/config/`](examples/config/)
 
 ---
 
-## Full tri-environment TBD example
+## Trunk-Based Development (TBD)
 
 ```yaml
 # .github/workflows/ci.yaml
@@ -269,9 +316,6 @@ jobs:
     uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
     with:
       image_name:  my-app
-      bake_file:   docker-bake.hcl
-      bake_target: default        # group containing api + worker sub-targets
-      platforms:   linux/amd64
       enforce_branch_naming: true
     secrets: inherit
 ```
@@ -296,15 +340,11 @@ jobs:
       )
     uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
     with:
-      versioning-tool:         semantic-release-python
       deployment-model:        tbd-pr
-      promote-branch-prefix:   promote
       environment:             ${{ github.event_name == 'push' && 'dev' || '' }}
       environments:            '["dev", "staging", "prod"]'
       prerelease-identifiers:  '{"dev": "dev", "staging": "rc"}'
       image_name:              my-app
-      bake_file:               docker-bake.hcl
-      bake_target:             default
     secrets: inherit
 
   create-promotion-pr:
@@ -323,11 +363,10 @@ Flow: merge `feat/*` → dev release (`v1.2.3-dev.1`) → bot creates `promote/s
 
 ---
 
-## Branch-Based Development (BBD) example
+## Branch-Based Development (BBD)
 
 ```yaml
 # .github/workflows/ci.yaml
-# Triggered on PRs to every env branch — CI rebuilds for each environment.
 name: CI
 on:
   pull_request:
@@ -341,17 +380,12 @@ jobs:
     uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
     with:
       image_name:  my-app
-      bake_file:   docker-bake.hcl
-      bake_target: default
-      platforms:   linux/amd64
-      enforce_branch_naming: false  # BBD uses env branches, not feat/* prefixes
+      enforce_branch_naming: false
     secrets: inherit
 ```
 
 ```yaml
 # .github/workflows/release.yaml
-# Triggers on push to any branch in branch-map.
-# Environment is auto-detected from the branch — no dispatch inputs needed.
 name: Release
 on:
   push:
@@ -361,14 +395,11 @@ jobs:
   release:
     uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
     with:
-      versioning-tool:  semantic-release-python
       deployment-model: bbd
       branch-map:       '{"dev": "dev", "staging": "staging", "main": "prod"}'
       environments:     '["dev", "staging", "prod"]'
       prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
       image_name:       my-app
-      bake_file:        docker-bake.hcl
-      bake_target:      default
     secrets: inherit
 ```
 
@@ -434,9 +465,9 @@ When `main` is protected, `GITHUB_TOKEN` cannot push the release commit that sem
 | [`.github/workflows/tbd-promote.yaml`](.github/workflows/tbd-promote.yaml) | Reusable: create promotion PR for next environment (TBD) |
 | [`.github/workflows/tbd-deploy-cloud-run.yaml`](.github/workflows/tbd-deploy-cloud-run.yaml) | Reusable: image promotion + Cloud Run deployment (optional) |
 | [`examples/solo/`](examples/solo/) | Solo (prod-only) caller example |
-| [`examples/dual-env/`](examples/dual-env/) | Dual-environment TBD caller examples |
-| [`examples/tri-env/`](examples/tri-env/) | Tri-environment TBD caller examples (ci + release + deploy) |
-| [`examples/quad-env/`](examples/quad-env/) | Quad-environment TBD caller examples |
+| [`examples/dual-env/`](examples/dual-env/) | Dual-environment Trunk-Based Development (TBD) caller examples |
+| [`examples/tri-env/`](examples/tri-env/) | Tri-environment Trunk-Based Development (TBD) caller examples (ci + release + deploy) |
+| [`examples/quad-env/`](examples/quad-env/) | Quad-environment Trunk-Based Development (TBD) caller examples |
 | [`examples/bbd/`](examples/bbd/) | Branch-Based Development (BBD) caller examples |
 | [`examples/config/`](examples/config/) | Config file templates for each versioning tool |
 
@@ -458,7 +489,7 @@ A source control branching model where all developers integrate their work direc
 
 A branching model where each environment has a dedicated long-lived branch (`dev`, `staging`, `main`). Code moves between environments by merging branches in sequence. Each merge triggers a CI rebuild and release for that environment.
 
-BBD is a more traditional approach; choose it when environment-specific builds are required (e.g. different config baked into the image per environment) or when your team is not yet comfortable with TBD's rapid cadence.
+BBD is a more traditional approach; choose it when environment-specific builds are required (e.g. different config baked into the image per environment) or when your team is not yet comfortable with Trunk-Based Development (TBD)'s rapid cadence.
 
 ### Semantic Versioning (semver)
 
@@ -491,6 +522,36 @@ A tool from the .NET ecosystem that calculates the current semantic version from
 GitVersion is the de-facto versioning standard for .NET/C# projects. Unlike semantic-release, it does not parse commit messages — it derives the version from git tags and branch names. Useful when your team does not want to enforce conventional commits.
 
 **Reference:** [gitversion.net](https://gitversion.net)
+
+### python-semantic-release
+
+A Python implementation of the semantic-release specification. It reads your commit history, applies the Conventional Commits rules, and bumps `MAJOR`, `MINOR`, or `PATCH` accordingly. Configuration lives in `pyproject.toml` under `[tool.semantic_release]`. This is the default versioning tool for this action.
+
+**Reference:** [python-semantic-release.readthedocs.io](https://python-semantic-release.readthedocs.io/)
+
+### semantic-release (npm)
+
+The original Node.js/JavaScript semantic-release package. Like `python-semantic-release`, it follows the Conventional Commits model. Configuration lives in `.releaserc.json` (or `package.json` under `"release"`). Use this when your project is already in the Node.js ecosystem or when you need its plugin ecosystem.
+
+**Reference:** [semantic-release.gitbook.io](https://semantic-release.gitbook.io/)
+
+### release-please
+
+Google's release tooling, designed around a release-PR model. Rather than creating a tag on every merge, release-please accumulates unreleased commits into a pending "Release PR". The PR's title and body are updated automatically as new commits land. Merging the Release PR creates the tag and GitHub Release. Configuration lives in `release-please-config.json`.
+
+Choose release-please when you want explicit human sign-off on the version bump before a tag is created, or when you prefer batch releases over continuous releases.
+
+**Reference:** [github.com/googleapis/release-please](https://github.com/googleapis/release-please)
+
+### When to use which
+
+| Ecosystem / preference | Recommended tool |
+|---|---|
+| Python project | `semantic-release-python` (default) |
+| Node.js / JavaScript project | `semantic-release-npm` |
+| .NET / C# project, or no conventional commits | `gitversion` |
+| Want explicit release PRs before tagging | `release-please` |
+| Any ecosystem, want continuous releases | `semantic-release-python` or `semantic-release-npm` |
 
 ---
 

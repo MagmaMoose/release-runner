@@ -1,6 +1,3 @@
-# Branch-Based Development (BBD) CI workflow
-# Images are built on PRs targeting any env branch.
-# For BBD, CI runs on EACH branch's PRs — the image is rebuilt per environment.
 name: CI
 on:
   pull_request:
@@ -14,8 +11,5 @@ jobs:
     uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
     with:
       image_name: my-app
-      bake_file: docker-bake.hcl
-      bake_target: default
-      platforms: linux/amd64
-      enforce_branch_naming: false  # BBD uses branch-per-env, not feat/* branches
+      enforce_branch_naming: false
     secrets: inherit

@@ -10,9 +10,6 @@ jobs:
   build:
     uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
     with:
-      image_name: my-app         # → IMAGE_NAME=<owner>/my-app for bake file
-      bake_file: docker-bake.hcl
-      bake_target: default        # group containing api + worker sub-targets
-      platforms: linux/amd64
+      image_name: my-app
       enforce_branch_naming: true
     secrets: inherit

@@ -1,13 +1,3 @@
-# Tri-environment TBD example: deploy workflow (staging + prod)
-# Copy to: .github/workflows/deploy.yaml in your application repo
-#
-# On every GitHub Release published, deploys to the appropriate environment.
-# GitHub Environment protection rules are the gating mechanism:
-#   - "staging" environment: requires QA approval
-#   - "production" environment: requires QA + stakeholder approval
-#
-# Create these environments in: Settings → Environments → New environment
-
 name: Deploy
 
 on:
@@ -18,12 +8,9 @@ jobs:
   deploy-staging:
     name: Deploy to Staging
     uses: calebsargeant/semantic-release/.github/workflows/tbd-deploy-cloud-run.yaml@main
-    # GitHub Environment protection rule gates this job until QA approves
     environment: staging
     with:
       image_name: my-app
-      bake_file: docker-bake.hcl
-      bake_target: default
       service: my-app-staging
       project_id: my-gcp-preprod-project
       region: africa-south1
@@ -45,12 +32,9 @@ jobs:
     name: Deploy to Production
     needs: deploy-staging
     uses: calebsargeant/semantic-release/.github/workflows/tbd-deploy-cloud-run.yaml@main
-    # GitHub Environment protection rule gates this job until QA + stakeholder approve
     environment: production
     with:
       image_name: my-app
-      bake_file: docker-bake.hcl
-      bake_target: default
       service: my-app-api
       project_id: my-gcp-prod-project
       region: africa-south1
