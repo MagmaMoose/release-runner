@@ -1,4 +1,5 @@
 import { handleRequest, type BrokerEnv } from "../src/index";
+import { generateKeyPairSync } from "node:crypto";
 
 const env: BrokerEnv = {
   GITHUB_APP_ID: "12345",
@@ -184,5 +185,44 @@ describe("token broker", () => {
         pull_requests: "write"
       }
     });
+  });
+
+  it("accepts GitHub-style PKCS#1 RSA private keys", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048
+    });
+    const pkcs1PrivateKey = privateKey.export({
+      format: "pem",
+      type: "pkcs1"
+    }) as string;
+
+    const { deps: injected } = deps({
+      githubResponses: [
+        Response.json({ id: 42 }),
+        Response.json({
+          token: "installation-token",
+          expires_at: "2026-05-03T13:00:00Z"
+        })
+      ]
+    });
+
+    const response = await handleRequest(
+      tokenRequest({
+        oidcToken: "valid.jwt",
+        owner: "octo-org",
+        repo: "octo-repo"
+      }),
+      {
+        ...env,
+        GITHUB_APP_PRIVATE_KEY: pkcs1PrivateKey
+      },
+      {
+        verifyOidcToken: injected.verifyOidcToken,
+        fetch: injected.fetch,
+        now: injected.now
+      }
+    );
+
+    expect(response.status).toBe(200);
   });
 });
