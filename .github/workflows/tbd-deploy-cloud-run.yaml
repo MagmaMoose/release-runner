@@ -121,36 +121,17 @@ on:
       url:
         description: 'Deployed Cloud Run service URL'
         value: ${{ jobs.deploy.outputs.url }}
-      version:
-        description: 'The semver version that was promoted and deployed'
-        value: ${{ jobs.promote.outputs.version }}
-      image_with_tag:
-        description: 'The promoted GHCR image reference (registry/org/image:version)'
-        value: ${{ jobs.promote.outputs.image_with_tag }}
     secrets:
       GCP_CREDENTIALS:
         description: 'GCP service account credentials JSON'
         required: true
 
 jobs:
-  promote:
-    name: Promote PR Image → Release Tag
-    uses: calebsargeant/reusable-workflows/.github/workflows/docker-release.yaml@main
-    with:
-      image_name: ${{ inputs.image_name }}
-      bake_file: ${{ inputs.bake_file }}
-      bake_target: ${{ inputs.bake_target }}
-      auto_promote_on_release: true
-      version_branch_mapping: ${{ inputs.version_branch_mapping }}
-      runner: ${{ inputs.runner }}
-    secrets: inherit
-
   deploy:
     name: Deploy to Cloud Run
-    needs: promote
     runs-on: ${{ inputs.runner }}
     outputs:
-      url: ${{ steps.deploy-action.outputs.url }}
+      url: ${{ steps.cloud-run-deploy.outputs.url }}
     permissions:
       contents: read
       id-token: write
@@ -159,25 +140,112 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy (${{ inputs.image_name }} → ${{ inputs.service }})
-        id: deploy-action
-        uses: calebsargeant/tbd-release/.github/actions/cloud-run-deploy@main
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
-          ghcr-token: ${{ secrets.GITHUB_TOKEN }}
-          gcp-credentials: ${{ secrets.GCP_CREDENTIALS }}
-          ghcr-image: ${{ needs.promote.outputs.image_with_tag }}
-          service: ${{ inputs.service }}
-          project-id: ${{ inputs.project_id }}
-          region: ${{ inputs.region }}
-          gar-image: ${{ inputs.gar_image }}
-          port: ${{ inputs.port }}
-          cpu: ${{ inputs.cpu }}
-          memory: ${{ inputs.memory }}
-          min-instances: ${{ inputs.min_instances }}
-          max-instances: ${{ inputs.max_instances }}
-          concurrency: ${{ inputs.concurrency }}
-          timeout: ${{ inputs.timeout }}
-          allow-unauthenticated: ${{ inputs.allow_unauthenticated }}
-          service-account: ${{ inputs.service_account }}
-          env-vars: ${{ inputs.env_vars }}
-          gcloud-secrets: ${{ inputs.gcloud_secrets }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ inputs.project_id }}
+
+      - name: Configure Docker for GAR
+        shell: bash
+        run: gcloud auth configure-docker ${{ inputs.region }}-docker.pkg.dev --quiet
+
+      - name: Resolve GHCR image reference
+        id: resolve-image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME="${OWNER_LOWER}/${{ inputs.image_name }}"
+          REGISTRY="ghcr.io"
+
+          # Determine version from release event tag
+          TAG="${{ github.event.release.tag_name }}"
+          if [ -z "${TAG}" ]; then
+            # Fallback: use the latest git tag
+            TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          fi
+
+          GHCR_IMAGE="${REGISTRY}/${IMAGE_NAME}:${TAG}"
+          echo "ghcr_image=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved GHCR image: ${GHCR_IMAGE}"
+
+      - name: Mirror image from GHCR to GAR
+        id: mirror
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GHCR_IMAGE="${{ steps.resolve-image.outputs.ghcr_image }}"
+          IMAGE_TAG="${{ steps.resolve-image.outputs.image_tag }}"
+          GAR_FULL_IMAGE="${{ inputs.gar_image }}:${IMAGE_TAG}"
+
+          echo "Mirroring ${GHCR_IMAGE} → ${GAR_FULL_IMAGE}"
+          docker buildx imagetools create --tag "${GAR_FULL_IMAGE}" "${GHCR_IMAGE}"
+
+          echo "gar_full_image=${GAR_FULL_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "Mirrored successfully."
+
+      - name: Deploy to Cloud Run
+        id: cloud-run-deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CMD=(
+            gcloud run deploy "${{ inputs.service }}"
+            "--image=${{ steps.mirror.outputs.gar_full_image }}"
+            "--region=${{ inputs.region }}"
+            --platform=managed
+            "--port=${{ inputs.port }}"
+            "--cpu=${{ inputs.cpu }}"
+            "--memory=${{ inputs.memory }}"
+            "--min-instances=${{ inputs.min_instances }}"
+            "--max-instances=${{ inputs.max_instances }}"
+            "--concurrency=${{ inputs.concurrency }}"
+            "--timeout=${{ inputs.timeout }}"
+            --quiet
+          )
+
+          if [[ "${{ inputs.allow_unauthenticated }}" == "true" ]]; then
+            CMD+=(--allow-unauthenticated)
+          else
+            CMD+=(--no-allow-unauthenticated)
+          fi
+
+          if [[ -n "${{ inputs.service_account }}" ]]; then
+            CMD+=("--service-account=${{ inputs.service_account }}")
+          fi
+
+          if [[ -n "${{ inputs.env_vars }}" ]]; then
+            CMD+=("--set-env-vars=${{ inputs.env_vars }}")
+          fi
+
+          if [[ -n "${{ inputs.gcloud_secrets }}" ]]; then
+            CMD+=("--update-secrets=${{ inputs.gcloud_secrets }}")
+          fi
+
+          echo "Deploying to Cloud Run..."
+          "${CMD[@]}"
+
+          URL=$(gcloud run services describe "${{ inputs.service }}" \
+            "--region=${{ inputs.region }}" \
+            --format='value(status.url)')
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "Deployed: ${URL}"

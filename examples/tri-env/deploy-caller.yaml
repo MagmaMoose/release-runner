@@ -1,14 +1,7 @@
 # Tri-environment TBD example: deploy workflow (staging + prod)
 # Copy to: .github/workflows/deploy.yaml in your application repo
 #
-# On every GitHub Release published, deploys to BOTH staging and prod.
-# The version_branch_mapping determines which tag format is used:
-#   main → stable (v1.2.3)   → deployed to prod
-#
-# For staging promotions (rc tags), trigger a manual prerelease via workflow_dispatch
-# on the tbd-release.yaml, or use a separate staging-release.yaml that runs PSR
-# with prerelease: true.
-#
+# On every GitHub Release published, deploys to the appropriate environment.
 # GitHub Environment protection rules are the gating mechanism:
 #   - "staging" environment: requires QA approval
 #   - "production" environment: requires QA + stakeholder approval
@@ -24,7 +17,7 @@ on:
 jobs:
   deploy-staging:
     name: Deploy to Staging
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-deploy-cloud-run.yaml@main
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-deploy-cloud-run.yaml@main
     # GitHub Environment protection rule gates this job until QA approves
     environment: staging
     with:
@@ -46,13 +39,12 @@ jobs:
       service_account: 'my-app@my-gcp-preprod-project.iam.gserviceaccount.com'
       env_vars: 'ENVIRONMENT=staging,PORT=8080'
       gcloud_secrets: 'DATABASE_URL=database-url:latest,SECRET_KEY=django-secret-key:latest'
-      version_branch_mapping: '{"main": {"type": "stable"}}'
     secrets: inherit
 
   deploy-prod:
     name: Deploy to Production
     needs: deploy-staging
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-deploy-cloud-run.yaml@main
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-deploy-cloud-run.yaml@main
     # GitHub Environment protection rule gates this job until QA + stakeholder approve
     environment: production
     with:
@@ -74,5 +66,4 @@ jobs:
       service_account: 'my-app@my-gcp-prod-project.iam.gserviceaccount.com'
       env_vars: 'ENVIRONMENT=prod,PORT=8080'
       gcloud_secrets: 'DATABASE_URL=database-url:latest,SECRET_KEY=django-secret-key:latest'
-      version_branch_mapping: '{"main": {"type": "stable"}}'
     secrets: inherit

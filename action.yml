@@ -30,24 +30,36 @@ inputs:
   deployment-model:
     description: |
       Controls how the target environment is determined.
-        tbd           (default) Trunk-Based Development. Pass `environment`
-                      explicitly (or derive it from workflow_dispatch inputs).
-                      One branch (main/trunk) — environment is the promotion target.
-        branch-based  Branch-per-environment (GitFlow-esque). The environment is
-                      inferred from the current branch using `branch-map`.
-                      Do not pass `environment` — it is resolved automatically.
+        tbd       (default) Trunk-Based Development. Pass `environment`
+                  explicitly (or derive it from workflow_dispatch inputs).
+                  One branch (main/trunk) — environment is the promotion target.
+        bbd       Branch-Based Development. The environment is inferred from
+                  the current branch using `branch-map`.
+                  Do not pass `environment` — it is resolved automatically.
+        tbd-pr    TBD with PR-based promotion. Environment is detected from
+                  the head branch of a merged promote/* PR (tbd-pr model).
+                  Pass `promote-branch-prefix` to configure the branch prefix.
     required: false
     default: 'tbd'
 
   branch-map:
     description: |
       JSON object mapping branch names to environment names.
-      Only used when deployment-model is branch-based.
+      Only used when deployment-model is bbd.
       Branch names are exact matches against GITHUB_REF_NAME.
       Example: {"dev": "dev", "staging": "staging", "main": "prod"}
       The environment names must match entries in the `environments` array.
     required: false
     default: ''
+
+  promote-branch-prefix:
+    description: |
+      Only used when deployment-model is tbd-pr.
+      Branch prefix for promotion PRs.
+      Example: if prefix is 'promote' and the merged PR branch is
+      'promote/staging/1.2.3-dev.1', the environment resolves to 'staging'.
+    required: false
+    default: 'promote'
 
   # ── Environment model ────────────────────────────────────────────────────
   environment:
@@ -56,7 +68,7 @@ inputs:
       Must be one of the values in `environments`.
       The LAST value in `environments` is always the production (stable) env.
       Required when deployment-model is tbd.
-      Omit when deployment-model is branch-based (auto-detected from branch-map).
+      Omit when deployment-model is bbd (auto-detected from branch-map).
     required: false
     default: ''
 
@@ -142,6 +154,22 @@ inputs:
     required: false
     default: 'GitVersion.yml'
 
+  gitversion-appsettings-file:
+    description: |
+      Path to a JSON file (e.g., appsettings.json) where the version should be
+      injected. Only used when versioning-tool is gitversion.
+      Uses jq to update the key at gitversion-appsettings-version-path.
+    required: false
+    default: ''
+
+  gitversion-appsettings-version-path:
+    description: |
+      jq path expression for the version field in the appsettings file.
+      Only used when gitversion-appsettings-file is set.
+      Example: .Application.Version
+    required: false
+    default: '.Application.Version'
+
   # ── release-please-specific ───────────────────────────────────────────────
   release-please-release-type:
     description: |
@@ -219,15 +247,15 @@ runs:
         echo "Environments:     ${ENVS}"
         echo "Identifiers:      ${IDS}"
 
-        # ── Branch-based: infer environment from current branch ─────────────
-        if [ "${DEPLOY_MODEL}" == "branch-based" ]; then
+        # ── Branch-Based Development: infer environment from current branch ─
+        if [ "${DEPLOY_MODEL}" == "bbd" ]; then
           if [ -z "${BRANCH_MAP}" ] || [ "${BRANCH_MAP}" == '{}' ] || [ "${BRANCH_MAP}" == 'null' ]; then
-            echo "::error::deployment-model is 'branch-based' but branch-map is empty."
+            echo "::error::deployment-model is 'bbd' but branch-map is empty."
             echo "::error::Set branch-map to a JSON object like: {\"dev\": \"dev\", \"main\": \"prod\"}"
             exit 1
           fi
           BRANCH="${GITHUB_REF_NAME}"
-          echo "Branch-based mode: current branch is '${BRANCH}'"
+          echo "BBD mode: current branch is '${BRANCH}'"
           DETECTED_ENV=$(echo "${BRANCH_MAP}" | jq -r --arg b "${BRANCH}" '.[$b] // empty')
           if [ -z "${DETECTED_ENV}" ]; then
             echo "::error::Branch '${BRANCH}' has no mapping in branch-map: ${BRANCH_MAP}"
@@ -236,6 +264,24 @@ runs:
           fi
           ENV="${DETECTED_ENV}"
           echo "Resolved environment '${ENV}' from branch '${BRANCH}'"
+        fi
+
+        # ── TBD with PR-based promotion: extract env from head branch ───────────────
+        if [ "${DEPLOY_MODEL}" == "tbd-pr" ]; then
+          BRANCH_PREFIX="${{ inputs.promote-branch-prefix }}"
+          HEAD_REF="${GITHUB_HEAD_REF}"  # set by GitHub on pull_request events
+          if [ -n "${HEAD_REF}" ] && echo "${HEAD_REF}" | grep -qE "^${BRANCH_PREFIX}/[^/]+/"; then
+            # Extract second path segment: promote/staging/1.2.3-dev.1 → staging
+            DETECTED_ENV=$(echo "${HEAD_REF}" | cut -d'/' -f2)
+            ENV="${DETECTED_ENV}"
+            echo "TBD-PR mode: detected env '${ENV}' from PR branch '${HEAD_REF}'"
+          elif [ -n "${ENV}" ]; then
+            echo "TBD-PR mode: using explicitly provided environment '${ENV}'"
+          else
+            echo "::error::deployment-model is 'tbd-pr' but environment cannot be determined."
+            echo "::error::Either provide environment (for push events) or merge a promote/{env}/{version} PR."
+            exit 1
+          fi
         fi
 
         # ── Validate that ENV is set ────────────────────────────────────────
@@ -392,6 +438,38 @@ runs:
             --title "${TAG}" \
             --generate-notes \
             ${IS_PRE_FLAG} || true
+        fi
+
+    - name: Inject version into appsettings
+      id: gitversion-appsettings
+      if: inputs.versioning-tool == 'gitversion' && inputs.gitversion-appsettings-file != ''
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.app-token.outputs.token || inputs.github-token }}
+      run: |
+        set -euo pipefail
+        APPSETTINGS="${{ inputs.gitversion-appsettings-file }}"
+        JSON_PATH="${{ inputs.gitversion-appsettings-version-path }}"
+        VERSION="${{ steps.gitversion-tag.outputs.version }}"
+
+        if [ ! -f "${APPSETTINGS}" ]; then
+          echo "::warning::appsettings file '${APPSETTINGS}' not found — skipping version injection"
+          exit 0
+        fi
+
+        TMP=$(mktemp)
+        jq --arg v "${VERSION}" "${JSON_PATH} = \$v" "${APPSETTINGS}" > "${TMP}"
+        mv "${TMP}" "${APPSETTINGS}"
+        echo "Injected version ${VERSION} into ${APPSETTINGS} at ${JSON_PATH}"
+
+        git config user.name  "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add "${APPSETTINGS}"
+        if ! git diff --cached --quiet; then
+          git commit -m "chore(release): persist version ${VERSION} in appsettings [skip ci]"
+          REMOTE_URL=$(git remote get-url origin)
+          AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GITHUB_TOKEN}@|")
+          git push "${AUTHED_URL}" HEAD:"${GITHUB_REF_NAME}"
         fi
 
     # ── 4d. release-please ──────────────────────────────────────────────────

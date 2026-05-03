@@ -1,41 +1,38 @@
-# Quad-environment TBD release workflow
-# Copy to: .github/workflows/release.yaml in your application repo
-#
-# Environment model:   dev  →  tst  →  acc  →  prd
-# Version tag model:   v1.2.3-dev.1  →  v1.2.3-alpha.1  →  v1.2.3-beta.1  →  v1.2.3
-# Image tag model:     pr-<N>  →  v1.2.3-dev.1  →  v1.2.3-alpha.1  →  v1.2.3-beta.1  →  v1.2.3
-
 name: Release
-
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - '.gitignore'
-      - 'LICENSE'
-      - 'CHANGELOG.md'
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Promote to environment'
-        required: true
-        type: choice
-        options:
-          - tst
-          - acc
-          - prd
-
+    paths-ignore: ['**.md', '.gitignore', 'LICENSE', 'CHANGELOG.md']
+  pull_request:
+    types: [closed]
+    branches: [main]
 jobs:
   release:
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@main
+    if: |
+      github.event_name == 'push' ||
+      (
+        github.event.pull_request.merged == true &&
+        startsWith(github.head_ref, 'promote/')
+      )
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
     with:
       versioning-tool: semantic-release-python
-      environment: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
+      deployment-model: tbd-pr
+      promote-branch-prefix: promote
+      environment: ${{ github.event_name == 'push' && 'dev' || '' }}
       environments: '["dev", "tst", "acc", "prd"]'
       prerelease-identifiers: '{"dev": "dev", "tst": "alpha", "acc": "beta"}'
-
-      # Single-image example. For multi-image see tri-env/release-caller.yaml.
-      images: '[{"name": "my-app", "bake_target": "default"}]'
+      image_name: my-app
       bake_file: docker-bake.hcl
+      bake_target: default
+    secrets: inherit
+  create-promotion-pr:
+    needs: release
+    if: needs.release.outputs.released == 'true' && needs.release.outputs.is-prerelease == 'true'
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-promote.yaml@v1
+    with:
+      version: ${{ needs.release.outputs.version }}
+      tag: ${{ needs.release.outputs.tag }}
+      current-environment: ${{ needs.release.outputs.resolved-environment }}
+      environments: '["dev", "tst", "acc", "prd"]'
     secrets: inherit

@@ -1,52 +1,18 @@
-# Tri-environment TBD example: CI workflow
-# Copy to: .github/workflows/ci.yaml in your application repo
-#
-# Triggers on every PR targeting main.
-# Builds each image (api + worker) tagged pr-<N> and pushes to GHCR.
-# Call tbd-ci.yaml once per image — each gets its own build job.
-#
-# For a single-image repo, remove the second build job.
-
 name: CI
-
 on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  # ── Add your test job(s) here and make build jobs depend on them ──────────
-  # test:
-  #   name: Tests
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - run: make test
-
-  build-api:
-    name: Build API image
-    # needs: test
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@main
+  build:
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
     with:
-      image_name: my-app-api         # → ghcr.io/your-org/my-app-api:pr-<N>
+      image_name: my-app         # → IMAGE_NAME=<owner>/my-app for bake file
       bake_file: docker-bake.hcl
-      bake_target: api
-      platforms: linux/amd64
-      enforce_branch_naming: true
-    secrets: inherit
-
-  build-worker:
-    name: Build Worker image
-    # needs: test
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@main
-    with:
-      image_name: my-app-worker      # → ghcr.io/your-org/my-app-worker:pr-<N>
-      bake_file: docker-bake.hcl
-      bake_target: worker
+      bake_target: default        # group containing api + worker sub-targets
       platforms: linux/amd64
       enforce_branch_naming: true
     secrets: inherit

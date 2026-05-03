@@ -1,4 +1,4 @@
-# TBD Release
+# semantic-release
 
 A GitHub Marketplace action for semantic release management with built-in Docker image promotion.
 
@@ -49,13 +49,13 @@ The last environment in your `environments` array always produces a stable semve
 
 ```yaml
 # .github/workflows/ci.yaml  — builds image on every PR to main
-- uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@v1
+- uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
   with:
     image_name:  my-app
     bake_target: default
 
 # .github/workflows/release.yaml  — versions + promotes image on merge or promote/* PR
-- uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@v1
+- uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
   with:
     versioning-tool:        semantic-release-python
     deployment-model:       tbd-pr
@@ -72,7 +72,7 @@ The last environment in your `environments` array always produces a stable semve
 
 ```yaml
 # .github/workflows/release.yaml  — one workflow, all branches
-- uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@v1
+- uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
   with:
     versioning-tool:  semantic-release-python
     deployment-model: bbd
@@ -117,6 +117,9 @@ If the source image is not found (e.g., PR image expired), a fresh `docker build
 
 Use a Docker Bake group target that contains all your images as sub-targets. Both `tbd-ci.yaml` and `tbd-release.yaml` accept a single `bake_target` — they run `docker buildx bake --print` to discover all sub-targets in the group and handle each one automatically.
 
+> **Why not just call `docker buildx bake` for promotion?**
+> Bake is for _building_. Image promotion (retag without rebuild) uses `docker buildx imagetools create`, which operates on one fully-qualified image at a time. Additionally, the GitHub Actions cache backend (`type=gha`) requires a unique scope per target to avoid cache collisions between images. Both requirements mean we discover targets via `bake --print`, then loop over them — either in a matrix (for promotion) or per-target cache args during build.
+
 ```hcl
 # docker-bake.hcl
 variable "REGISTRY"   { default = "ghcr.io" }
@@ -139,7 +142,7 @@ Pass `image_name: my-app` and `bake_target: default` — both workflows expand t
 ```yaml
 # CI — one job builds all images in the group
 build:
-  uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@v1
+  uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
   with:
     image_name:  my-app
     bake_target: default   # builds api + worker in parallel
@@ -147,7 +150,7 @@ build:
 
 # Release — discovers all targets, promotes each one independently
 release:
-  uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@v1
+  uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
   with:
     image_name:  my-app
     bake_file:   docker-bake.hcl
@@ -161,11 +164,12 @@ release:
 
 | Profile | `environments` | `prerelease-identifiers` | Tag examples |
 |---|---|---|---|
+| **Solo** | `["prod"]` | `{}` | `v1.2.3` |
 | **Dual** | `["dev", "prod"]` | `{"dev": "dev"}` | `v1.2.3-dev.1` → `v1.2.3` |
 | **Tri** *(default)* | `["dev", "staging", "prod"]` | `{"dev": "dev", "staging": "rc"}` | `v1.2.3-dev.1` → `v1.2.3-rc.1` → `v1.2.3` |
 | **Quad** | `["dev", "tst", "acc", "prd"]` | `{"dev": "dev", "tst": "alpha", "acc": "beta"}` | `v1.2.3-dev.1` → `v1.2.3-alpha.1` → `v1.2.3-beta.1` → `v1.2.3` |
 
-Environment names are fully configurable — use any naming convention your org prefers.
+Environment names are fully configurable — use any naming convention your org prefers. See [`examples/solo/`](examples/solo/) for a single-environment caller.
 
 ---
 
@@ -228,6 +232,8 @@ Example config files for each tool are in [`examples/config/`](examples/config/)
 |---|---|---|
 | `gitversion-spec` | `6.x` | `gitversion` |
 | `gitversion-config` | `GitVersion.yml` | `gitversion` |
+| `gitversion-appsettings-file` | `''` | `gitversion` — path to a JSON file (e.g. `appsettings.json`) where the version should be injected and committed back to the branch |
+| `gitversion-appsettings-version-path` | `.Application.Version` | `gitversion` — jq path for the version field in the appsettings file (e.g. `.Application.Version`) |
 | `release-please-release-type` | `simple` | `release-please` |
 | `release-please-config-file` | `release-please-config.json` | `release-please` |
 
@@ -260,7 +266,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@v1
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
     with:
       image_name:  my-app
       bake_file:   docker-bake.hcl
@@ -288,7 +294,7 @@ jobs:
         github.event.pull_request.merged == true &&
         startsWith(github.head_ref, 'promote/')
       )
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@v1
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
     with:
       versioning-tool:         semantic-release-python
       deployment-model:        tbd-pr
@@ -304,7 +310,7 @@ jobs:
   create-promotion-pr:
     needs: release
     if: needs.release.outputs.released == 'true' && needs.release.outputs.is-prerelease == 'true'
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-promote.yaml@v1
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-promote.yaml@v1
     with:
       version:             ${{ needs.release.outputs.version }}
       tag:                 ${{ needs.release.outputs.tag }}
@@ -332,7 +338,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@v1
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
     with:
       image_name:  my-app
       bake_file:   docker-bake.hcl
@@ -353,7 +359,7 @@ on:
     paths-ignore: ['**.md', '.gitignore', 'LICENSE', 'CHANGELOG.md']
 jobs:
   release:
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-release.yaml@v1
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
     with:
       versioning-tool:  semantic-release-python
       deployment-model: bbd
@@ -378,7 +384,7 @@ jobs:
       version: ${{ steps.tbd.outputs.version }}
       tag:     ${{ steps.tbd.outputs.tag }}
     steps:
-      - uses: calebsargeant/tbd-release@v1
+      - uses: calebsargeant/semantic-release@v1
         id: tbd
         with:
           versioning-tool: semantic-release-python
@@ -400,16 +406,21 @@ jobs:
 
 ## GitHub App setup (recommended for branch protection)
 
-When `main` is protected, `GITHUB_TOKEN` cannot push release commits. Use a GitHub App token:
+When `main` is protected, `GITHUB_TOKEN` cannot push the release commit that semantic-release creates. A GitHub App token bypasses branch protection without disabling it.
 
-1. Create a GitHub App (Settings → Developer settings → GitHub Apps → New App)
-   - Permissions: **Contents: Read and write**, **Metadata: Read**
-2. Install the app on your repositories
-3. Note the App ID and generate a private key
-4. Add two repo secrets:
+**Each organisation creates its own App** — the private key cannot be safely shared, so a single "public" app for everyone is not possible. Setup takes about 5 minutes per organisation:
+
+1. Go to **Settings → Developer settings → GitHub Apps → New GitHub App**
+   - App name: e.g. `my-org-semantic-release`
+   - Permissions: **Contents: Read and write**, **Pull requests: Read and write**, **Metadata: Read-only**
+   - Uncheck "Active" under Webhook
+2. Install the app on the target repositories (or all repos in the org)
+3. Note the **App ID** (shown on the app's general settings page)
+4. Generate a **private key** (bottom of the page) — download the `.pem` file
+5. Add these as repository (or organisation) secrets:
    - `SEMANTIC_RELEASE_APP_ID` — the numeric App ID
    - `SEMANTIC_RELEASE_APP_PRIVATE_KEY` — the full `.pem` file contents
-5. Pass them to the action via `app-id` and `app-private-key` (or use `secrets: inherit`)
+6. Pass via `secrets: inherit` in your caller workflow — the reusable workflows pick them up automatically
 
 ---
 
@@ -417,16 +428,69 @@ When `main` is protected, `GITHUB_TOKEN` cannot push release commits. Use a GitH
 
 | Path | Purpose |
 |---|---|
-| [`action.yml`](action.yml) | **This marketplace action** — generic TBD versioning |
-| [`.github/workflows/tbd-ci.yaml`](.github/workflows/tbd-ci.yaml) | Reusable: PR image build with TBD branch name enforcement |
+| [`action.yml`](action.yml) | **This marketplace action** — versioning orchestrator (use directly or via `tbd-release.yaml`) |
+| [`.github/workflows/tbd-ci.yaml`](.github/workflows/tbd-ci.yaml) | Reusable: PR image build with branch name enforcement |
 | [`.github/workflows/tbd-release.yaml`](.github/workflows/tbd-release.yaml) | Reusable: versioning + GHCR image promotion |
+| [`.github/workflows/tbd-promote.yaml`](.github/workflows/tbd-promote.yaml) | Reusable: create promotion PR for next environment (TBD) |
 | [`.github/workflows/tbd-deploy-cloud-run.yaml`](.github/workflows/tbd-deploy-cloud-run.yaml) | Reusable: image promotion + Cloud Run deployment (optional) |
-| [`.github/actions/cloud-run-deploy/`](.github/actions/cloud-run-deploy/) | Sub-action: GHCR → GAR mirror + `gcloud run deploy` |
-| [`examples/tri-env/`](examples/tri-env/) | Tri-environment TBD caller examples (ci + release + deploy) |
+| [`examples/solo/`](examples/solo/) | Solo (prod-only) caller example |
 | [`examples/dual-env/`](examples/dual-env/) | Dual-environment TBD caller examples |
+| [`examples/tri-env/`](examples/tri-env/) | Tri-environment TBD caller examples (ci + release + deploy) |
 | [`examples/quad-env/`](examples/quad-env/) | Quad-environment TBD caller examples |
 | [`examples/bbd/`](examples/bbd/) | Branch-Based Development (BBD) caller examples |
 | [`examples/config/`](examples/config/) | Config file templates for each versioning tool |
+
+---
+
+## Background
+
+### Trunk-Based Development (TBD)
+
+A source control branching model where all developers integrate their work directly into a shared trunk (`main`) at least once per day. There are no long-lived feature branches — only short-lived branches (hours to a day or two) that are merged via pull request.
+
+- Eliminates merge hell and "big bang" integrations
+- Encourages small, frequent, reversible changes
+- Requires a robust CI pipeline to keep trunk always releasable
+
+**Reference:** [trunkbaseddevelopment.com](https://trunkbaseddevelopment.com)
+
+### Branch-Based Development (BBD)
+
+A branching model where each environment has a dedicated long-lived branch (`dev`, `staging`, `main`). Code moves between environments by merging branches in sequence. Each merge triggers a CI rebuild and release for that environment.
+
+BBD is a more traditional approach; choose it when environment-specific builds are required (e.g. different config baked into the image per environment) or when your team is not yet comfortable with TBD's rapid cadence.
+
+### Semantic Versioning (semver)
+
+Versions take the form `MAJOR.MINOR.PATCH[-PRERELEASE]`. The rules:
+
+- `PATCH` — backwards-compatible bug fixes
+- `MINOR` — new backwards-compatible functionality
+- `MAJOR` — incompatible API changes (or intentional breaking change)
+- Prerelease: `1.2.3-dev.1`, `1.2.3-rc.1` — not yet stable, not suitable for production
+
+**Reference:** [semver.org](https://semver.org)
+
+### Conventional Commits
+
+A lightweight commit message specification that semantic-release tools parse to determine the next version automatically:
+
+| Prefix | Version bump | Example |
+|---|---|---|
+| `fix:` | PATCH | `fix: handle null user in login` |
+| `feat:` | MINOR | `feat: add password reset flow` |
+| `feat!:` or `BREAKING CHANGE:` | MAJOR | `feat!: drop Python 3.9 support` |
+| `chore:`, `docs:`, `ci:`, `test:`, `refactor:` | no bump | routine maintenance |
+
+**Reference:** [conventionalcommits.org](https://www.conventionalcommits.org)
+
+### GitVersion
+
+A tool from the .NET ecosystem that calculates the current semantic version from your git history and branch structure, without requiring a config file per branch. It reads a `GitVersion.yml` to understand your branching strategy and outputs variables like `MajorMinorPatch`, `SemVer`, `FullSemVer`.
+
+GitVersion is the de-facto versioning standard for .NET/C# projects. Unlike semantic-release, it does not parse commit messages — it derives the version from git tags and branch names. Useful when your team does not want to enforce conventional commits.
+
+**Reference:** [gitversion.net](https://gitversion.net)
 
 ---
 

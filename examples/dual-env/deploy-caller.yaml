@@ -2,8 +2,7 @@
 # Copy to: .github/workflows/deploy.yaml in your application repo
 #
 # Triggered when a GitHub Release is published (by release-caller.yaml → semantic-release).
-# Promotes the pr-<N> GHCR image to the release version tag, mirrors it to GAR,
-# then deploys to Cloud Run.
+# Mirrors the GHCR image to GAR, then deploys to Cloud Run.
 
 name: Deploy
 
@@ -13,7 +12,7 @@ on:
 
 jobs:
   deploy:
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-deploy-cloud-run.yaml@main
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-deploy-cloud-run.yaml@main
     with:
       image_name: my-app
       bake_file: docker-bake.hcl
@@ -33,5 +32,4 @@ jobs:
       service_account: 'my-app@my-gcp-project.iam.gserviceaccount.com'
       env_vars: 'ENVIRONMENT=prod,PORT=8080'
       gcloud_secrets: 'DATABASE_URL=database-url:latest,SECRET_KEY=django-secret-key:latest'
-      version_branch_mapping: '{"main": {"type": "stable"}}'
     secrets: inherit

@@ -1,35 +1,16 @@
-# Dual-environment TBD example: CI workflow
-# Copy to: .github/workflows/ci.yaml in your application repo
-#
-# Triggers on every PR targeting main.
-# Builds the image tagged pr-<N> and pushes to GHCR.
-
 name: CI
-
 on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  # ── Add your test job(s) here ─────────────────────────────────────────────
-  # test:
-  #   name: Tests
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - run: make test
-
   build:
-    name: Build image
-    # needs: test
-    uses: calebsargeant/tbd-release/.github/workflows/tbd-ci.yaml@main
+    uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
     with:
-      image_name: my-app             # → ghcr.io/your-org/my-app:pr-<N>
+      image_name: my-app
       bake_file: docker-bake.hcl
       bake_target: default
       platforms: linux/amd64
