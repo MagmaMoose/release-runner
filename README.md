@@ -6,6 +6,8 @@ Supports **Trunk-Based Development (TBD)** (single `main` branch) and **Branch-B
 
 Supports three authentication modes: the workflow `GITHUB_TOKEN`, a bring-your-own GitHub App, or a shared public GitHub App through the Release Runner token broker (Cloudflare Worker) in [`worker/`](worker/).
 
+📚 Consumer docs website (MkDocs + GitHub Pages): see `docs/` in this repository.
+
 ---
 
 ## The model
