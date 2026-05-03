@@ -27,15 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v6
-        with:
-          # For first-time setup, provide a repository/org secret named
-          # PAGES_ENABLEMENT_TOKEN (PAT or GitHub App token with required scopes)
-          # to auto-enable Pages. Without it, Pages must already be enabled.
-          token: ${{ secrets.PAGES_ENABLEMENT_TOKEN != '' && secrets.PAGES_ENABLEMENT_TOKEN || github.token }}
-          enablement: ${{ secrets.PAGES_ENABLEMENT_TOKEN != '' && 'true' || 'false' }}
-
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
