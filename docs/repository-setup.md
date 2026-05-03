@@ -1,10 +1,10 @@
 # Repository Setup
 
-Use this page when adding `calebsargeant/semantic-release@v1` to a repository.
+Use this checklist after the organization-level app and ruleset setup is done.
 
-## 1. Add Release Tool Configuration
+## 1. Add A Versioning Config
 
-Pick one versioning engine and commit its config.
+Pick one release tool and commit its config.
 
 | `versioning-tool` | Required config |
 |---|---|
@@ -13,13 +13,18 @@ Pick one versioning engine and commit its config.
 | `gitversion` | `GitVersion.yml` |
 | `release-please` | `release-please-config.json` |
 
-Template files are available in `examples/config/` in the repository.
+Template files live in `examples/config/` in the repository.
 
-## 2. Decide Whether Docker Is In Scope
+## 2. Choose Docker Or Version-Only
 
-Leave `image_name` empty for version-only releases.
+If Release Runner should only create versions, tags, and GitHub Releases, do not set `image_name`.
 
-Set `image_name` when the action should build or promote container images. The repository then needs a Docker Bake file, usually `docker-bake.hcl`.
+If Release Runner should build and promote container images, add:
+
+- a Docker Bake file, usually `docker-bake.hcl`
+- a PR workflow using `mode: ci`
+- `image_name` in the release workflow
+- `packages: write` permissions
 
 Single-image Bake target:
 
@@ -37,11 +42,13 @@ target "default" {
 }
 ```
 
-Multi-image repositories should make `default` a Bake group. Release Runner expands the group and processes every target.
+For multiple images, make `default` a Bake group and give each target its own tag.
 
-## 3. Add Pull Request CI When Docker Is Enabled
+## 3. Add CI For Docker Repositories
 
-CI mode builds the PR image tag that release mode later promotes.
+Skip this section for version-only releases.
+
+TBD pull request CI:
 
 ```yaml
 name: CI
@@ -66,19 +73,37 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-For BBD repositories, disable TBD branch naming checks:
+BBD pull request CI:
 
 ```yaml
-with:
-  mode: ci
-  image_name: my-app
-  enforce_branch_naming: 'false'
-  github-token: ${{ secrets.GITHUB_TOKEN }}
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, staging, main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: read
+    steps:
+      - uses: calebsargeant/semantic-release@v1
+        with:
+          mode: ci
+          image_name: my-app
+          enforce_branch_naming: 'false'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-## 4. Add A Release Workflow
+## 4. Add The Release Workflow
 
-### Single Production Environment
+### Production-Only
+
+Use this when every release from `main` is stable.
 
 ```yaml
 name: Release
@@ -103,7 +128,11 @@ jobs:
           prerelease-identifiers: '{}'
 ```
 
-### TBD With Promotion PRs
+Add `packages: write` and `image_name` when Docker promotion is enabled.
+
+### TBD Promotion PRs
+
+Use this when a merge to `main` releases to the first environment and the action opens promotion PRs for the next environments.
 
 ```yaml
 name: Release
@@ -142,7 +171,11 @@ jobs:
           create-promotion-pr: 'true'
 ```
 
+Remove `packages: write` and `image_name` for a version-only flow.
+
 ### BBD Branch Mapping
+
+Use this when each environment has its own long-lived branch.
 
 ```yaml
 name: Release
@@ -160,6 +193,7 @@ jobs:
       id-token: write
     steps:
       - uses: calebsargeant/semantic-release@v1
+        id: release
         with:
           mode: release
           deployment-model: bbd
@@ -169,9 +203,11 @@ jobs:
           image_name: my-app
 ```
 
-## 5. Use Outputs For Deployment
+Remove `packages: write` and `image_name` for a version-only flow.
 
-Release Runner does not deploy your application. Use outputs in later jobs.
+## 5. Use Outputs In Deployment Jobs
+
+Release Runner stops at release orchestration. Deployment jobs should consume its outputs.
 
 ```yaml
 jobs:
@@ -205,8 +241,8 @@ jobs:
 
 Before relying on the workflow:
 
-1. Open a PR and confirm `mode: ci` publishes `pr-<number>` if Docker is enabled.
+1. Open a PR and confirm Docker CI publishes `pr-<number>` when Docker is enabled.
 2. Merge a Conventional Commit and confirm a tag is created.
-3. Confirm the release tool updates only expected files.
+3. Confirm the selected versioning tool updates only expected files.
 4. Confirm a promotion PR is created when using `tbd-pr`.
 5. Confirm downstream deployment jobs read `tag`, `version`, and `released` correctly.

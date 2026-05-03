@@ -30,8 +30,8 @@ release  (default) Run versioning, promote Docker image, and optionally
 Description:
 
 Token source for git/release operations. One of:
-  public-app   (default) Exchange GitHub Actions OIDC for a
-               Release Runner token-broker token in release mode.
+  public-app   (default) Use the Release Runner GitHub App installed
+               on the repository or organization.
   auto         Use private-app when app-id/app-private-key are set,
                otherwise use github-token/GITHUB_TOKEN.
   github-token Use github-token or the workflow GITHUB_TOKEN.
@@ -44,8 +44,8 @@ Token source for git/release operations. One of:
 
 Description:
 
-HTTPS URL for the public GitHub App token broker.
-Defaults to the public Release Runner broker.
+Advanced override for the hosted Release Runner GitHub App auth service.
+Most repositories should not set this.
 
 ### `oidc-audience`
 
@@ -54,7 +54,7 @@ Defaults to the public Release Runner broker.
 
 Description:
 
-OIDC audience used for the public token broker.
+Advanced override for public-app authentication. Most repositories should not set this.
 
 ### `versioning-tool`
 

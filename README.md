@@ -58,7 +58,7 @@ jobs:
           prerelease-identifiers: '{}'
 ```
 
-By default, release jobs use `auth-mode: public-app`, which exchanges the workflow OIDC token for a short-lived GitHub App installation token. Grant `id-token: write` and install the Release Runner app for repositories that use the hosted public app mode.
+By default, release jobs use the Release Runner GitHub App. Install the app on the organization or repository, then grant the release job `id-token: write`.
 
 If you prefer to use the workflow token instead:
 
@@ -245,4 +245,4 @@ Before using the action, your repository needs:
 - `packages: write` when Docker promotion is enabled
 - a Docker Bake file when `image_name` is set
 
-See the full setup guide at [semver.calebsargeant.com](https://semver.calebsargeant.com) for organization auth setup, broker details, environment examples, and troubleshooting.
+See the full setup guide at [semver.calebsargeant.com](https://semver.calebsargeant.com) for organization auth setup, repository setup, environment examples, and troubleshooting.

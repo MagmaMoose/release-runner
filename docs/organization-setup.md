@@ -1,46 +1,50 @@
 # Organization Setup
 
-Do this once for an organization, then reuse the same decisions across repositories.
+Do this once before onboarding repositories.
 
-## Choose Authentication
+## Recommended Auth: Release Runner GitHub App
 
-Release Runner needs a token for checkout, tags, GitHub Releases, promotion branches, and promotion PRs. Docker registry login still uses `github-token` or the workflow `GITHUB_TOKEN`.
+Most repositories should use the default `auth-mode: public-app`.
 
-| Auth mode | Best fit | Required workflow permission |
-|---|---|---|
-| `public-app` | Default hosted app/broker flow; no private key in consumer repos | `id-token: write` |
-| `private-app` | Organization-owned GitHub App and private key | none beyond normal job permissions |
-| `github-token` | Simple repos where `GITHUB_TOKEN` can write releases/tags | none beyond normal job permissions |
-| `auto` | Mixed repos; prefer private app when secrets are configured | depends on selected token |
+For users, this means:
 
-## Public App Mode
+1. Install the Release Runner GitHub App on the organization or selected repository.
+2. Allow the app through branch protection or repository rulesets if releases write protected refs.
+3. Grant release jobs `id-token: write`.
+4. Keep the default auth inputs.
 
-Use `auth-mode: public-app` when repositories can install the hosted Release Runner GitHub App.
-
-Checklist:
-
-- Install the app on each repository that will release.
-- Grant release jobs `id-token: write`.
-- Keep the default `token-broker-url` unless you run your own broker.
-- Allow the app through branch protection or repository rulesets when releases need to push protected refs.
-
-Workflow shape:
+Workflow permissions:
 
 ```yaml
 permissions:
   contents: read
   id-token: write
   packages: write
+```
 
+Use `packages: write` only when Docker image build or promotion is enabled.
+
+Release job:
+
+```yaml
 steps:
   - uses: calebsargeant/semantic-release@v1
     with:
       mode: release
 ```
 
-## Private App Mode
+## When To Use Another Auth Mode
 
-Use `auth-mode: private-app` when your organization wants to own the GitHub App, private key, permissions, and installation lifecycle.
+| Auth mode | Use it when | What users configure |
+|---|---|---|
+| `public-app` | You install the Release Runner GitHub App | App installation and `id-token: write` |
+| `private-app` | Your organization owns the GitHub App | App ID and private key secrets |
+| `github-token` | Branch protection allows `GITHUB_TOKEN` to release | `contents: write` and optional `pull-requests: write` |
+| `auto` | You want private app auth when secrets exist, otherwise workflow token | Private app secrets or workflow token permissions |
+
+## Private GitHub App
+
+Use this when your organization does not want to use the Release Runner GitHub App.
 
 Create a GitHub App with repository permissions:
 
@@ -70,9 +74,9 @@ Workflow input:
     app-private-key: ${{ secrets.SEMANTIC_RELEASE_APP_PRIVATE_KEY }}
 ```
 
-## Workflow Token Mode
+## Workflow Token
 
-Use `auth-mode: github-token` when the default workflow token is allowed to create the release commit, tag, GitHub Release, and any promotion PR branch.
+Use `auth-mode: github-token` only when the repository allows `GITHUB_TOKEN` to create everything your release requires.
 
 ```yaml
 permissions:
@@ -88,26 +92,16 @@ steps:
       github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-This is the simplest mode, but it often fails in repositories with strict protected branches or rulesets.
+This mode is useful for simple repositories, but it commonly fails with strict protected branches or rulesets.
 
-## Branch Protection And Rulesets
+## Branch Protection Checklist
 
-Confirm the selected actor can perform the writes your workflow needs:
+Confirm the selected release actor can:
 
 - create and push tags
 - create GitHub Releases
 - push release commits when the versioning tool updates files
-- push `promote/<environment>/<version>` branches when `create-promotion-pr: 'true'`
+- push `promote/<environment>/<version>` branches when promotion PRs are enabled
 - open promotion pull requests
 
-If your rulesets require signed commits, linear history, status checks, or specific bypass actors, configure the selected GitHub App or token actor before enabling releases.
-
-## Package Permissions
-
-When `image_name` is set, CI and release jobs need package access:
-
-- `packages: write` for GHCR publish/promote
-- package visibility that allows the repository workflow to push
-- a Docker Bake file in the repository
-
-Version-only releases do not need package permissions.
+If rulesets require signed commits, status checks, linear history, or specific bypass actors, configure the selected app or token actor before enabling releases.

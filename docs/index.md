@@ -2,95 +2,51 @@
 
 Release Runner is the GitHub Marketplace Action published as `calebsargeant/semantic-release@v1`.
 
-Use it when a repository needs semantic versioning, GitHub Releases, optional Docker image promotion, and optional promotion PRs between environments. This site covers setup and operations around the action. The README stays focused on the Marketplace listing.
+Use this site to choose and configure the release setup your repository needs. It covers the public action behavior: app installation, workflow permissions, versioning tools, deployment models, and optional Docker image promotion.
 
-## What The Action Owns
+Internal service hosting details are intentionally out of scope for these pages.
 
-| Area | Supported by the action |
+## Start Here
+
+| Question | Page |
 |---|---|
-| Release mode | Calculate a version, create tags/releases, normalize outputs |
+| What must be configured once for my org? | [Organization setup](organization-setup.md) |
+| Which action inputs match my release flow? | [Choose your setup](choose-your-setup.md) |
+| What files and workflows does a repo need? | [Repository setup](repository-setup.md) |
+| What are all supported inputs and outputs? | [Action inputs and outputs](reference/action-inputs-outputs.md) |
+
+## What The Action Does
+
+| Area | Supported behavior |
+|---|---|
+| Release mode | Run the selected versioning tool, create tags/releases, and expose normalized outputs |
 | CI mode | Build Docker Bake targets and push `pr-<number>` tags |
-| Docker promotion | Retag an existing source image when possible, build as fallback |
-| Environment model | `tbd`, `tbd-pr`, and `bbd` |
-| Authentication | hosted public app broker, private GitHub App, or workflow token |
-| Release tools | `semantic-release-python`, `semantic-release-npm`, `gitversion`, `release-please` |
+| Docker promotion | Promote an existing image tag when possible, with build fallback |
+| Environment model | Support single-environment, TBD promotion, and BBD branch mapping |
+| Authentication | Use the Release Runner GitHub App, your own GitHub App, or `GITHUB_TOKEN` |
 
-The action does not own deployment to your runtime platform. Use the outputs and published image tags in your deployment workflows.
+Release Runner does not deploy your application to Cloud Run, Kubernetes, ECS, VMs, or any other runtime. Use the action outputs and image tags in deployment workflows that you own.
 
-## Pick A Path
+## Setup Shape
 
-| Goal | Start here |
+Every repository chooses one option from each row.
+
+| Choice | Options |
 |---|---|
-| Prepare org-level app/ruleset settings | [Organization setup](organization-setup.md) |
-| Add the action to a repository | [Repository setup](repository-setup.md) |
-| Host your own public app token broker | [Release Runner Worker](release-runner-worker.md) |
-| Check every input and output | [Action inputs and outputs](reference/action-inputs-outputs.md) |
+| Authentication | Release Runner GitHub App, private GitHub App, or workflow token |
+| Versioning tool | `semantic-release-python`, `semantic-release-npm`, `gitversion`, or `release-please` |
+| Environment model | single production, `tbd`, `tbd-pr`, or `bbd` |
+| Docker | disabled, single-image Bake target, or multi-image Bake group |
+| Promotion | no promotion PRs, automatic `tbd-pr` promotion PRs, or branch-based BBD promotion |
 
-## Deployment Models
+## Common Paths
 
-### `tbd`
-
-Use one trunk branch. The workflow passes the target `environment` explicitly.
-
-```yaml
-with:
-  mode: release
-  deployment-model: tbd
-  environment: prod
-  environments: '["prod"]'
-  prerelease-identifiers: '{}'
-```
-
-### `tbd-pr`
-
-Use one trunk branch and promote prereleases by reviewed PRs. The first release passes `environment`; later promotion releases are detected from branches such as `promote/staging/1.2.3-dev.1`.
-
-```yaml
-with:
-  mode: release
-  deployment-model: tbd-pr
-  environment: ${{ github.event_name == 'push' && 'dev' || '' }}
-  environments: '["dev", "staging", "prod"]'
-  prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-  create-promotion-pr: 'true'
-```
-
-### `bbd`
-
-Use one long-lived branch per environment. The action maps `github.ref_name` to an environment with `branch-map`.
-
-```yaml
-with:
-  mode: release
-  deployment-model: bbd
-  branch-map: '{"dev": "dev", "staging": "staging", "main": "prod"}'
-  environments: '["dev", "staging", "prod"]'
-  prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-```
-
-## Version Tags
-
-The last entry in `environments` is stable. Every earlier environment is a prerelease.
-
-| Environments | Identifiers | Tags |
-|---|---|---|
-| `["prod"]` | `{}` | `v1.2.3` |
-| `["dev", "prod"]` | `{"dev": "dev"}` | `v1.2.3-dev.1`, then `v1.2.3` |
-| `["dev", "staging", "prod"]` | `{"dev": "dev", "staging": "rc"}` | `v1.2.3-dev.1`, then `v1.2.3-rc.1`, then `v1.2.3` |
-
-## Docker Promotion
-
-Set `image_name` to enable Docker behavior. Leave it empty for version-only releases.
-
-In CI mode, Release Runner builds the configured Bake target or group and pushes `pr-<number>`.
-
-In release mode, Release Runner promotes images only when a release was created. It tries to retag the source image with `docker buildx imagetools create`; if the source tag is unavailable, it runs a fresh `docker buildx bake --push` for the target.
-
-## Auth Modes
-
-| Mode | Use when |
+| If you want | Use |
 |---|---|
-| `public-app` | You use the hosted Release Runner app and broker. This is the default for release jobs. |
-| `private-app` | Your organization owns the GitHub App and stores the private key in secrets. |
-| `github-token` | Branch protection allows the workflow token to create tags/releases/PRs. |
-| `auto` | You want private app auth when secrets are present and workflow token otherwise. |
+| A simple production release from `main` | Single production environment with `environment: prod` |
+| Dev, staging, and prod from one trunk branch | `deployment-model: tbd-pr` and `create-promotion-pr: 'true'` |
+| Long-lived environment branches | `deployment-model: bbd` and `branch-map` |
+| Version-only releases | Omit `image_name` |
+| Container release tags | Add PR CI with `mode: ci`, then set `image_name` in release mode |
+
+The rest of this site walks through those combinations in detail.

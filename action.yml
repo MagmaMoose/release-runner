@@ -24,8 +24,8 @@ inputs:
   auth-mode:
     description: |
       Token source for git/release operations. One of:
-        public-app   (default) Exchange GitHub Actions OIDC for a
-                     Release Runner token-broker token in release mode.
+        public-app   (default) Use the Release Runner GitHub App installed
+                     on the repository or organization.
         auto         Use private-app when app-id/app-private-key are set,
                      otherwise use github-token/GITHUB_TOKEN.
         github-token Use github-token or the workflow GITHUB_TOKEN.
@@ -35,13 +35,13 @@ inputs:
 
   token-broker-url:
     description: |
-      HTTPS URL for the public GitHub App token broker.
-      Defaults to the public Release Runner broker.
+      Advanced override for the hosted Release Runner GitHub App auth service.
+      Most repositories should not set this.
     required: false
     default: 'https://release-runner.sargeant.workers.dev'
 
   oidc-audience:
-    description: 'OIDC audience used for the public token broker.'
+    description: 'Advanced override for public-app authentication. Most repositories should not set this.'
     required: false
     default: 'release-runner'
 
