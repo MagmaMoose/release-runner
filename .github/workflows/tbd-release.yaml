@@ -28,6 +28,20 @@ on:
         type: string
         default: 'semantic-release-python'
 
+      # ── Authentication ───────────────────────────────────────────────────────
+      auth-mode:
+        required: false
+        type: string
+        default: 'auto'
+      token-broker-url:
+        required: false
+        type: string
+        default: ''
+      oidc-audience:
+        required: false
+        type: string
+        default: 'semantic-release-token-broker'
+
       # ── Environment model ────────────────────────────────────────────────────
       environment:
         required: false
@@ -182,10 +196,13 @@ jobs:
       prerelease-identifier: ${{ steps.tbd.outputs.prerelease-identifier }}
       resolved-environment: ${{ steps.tbd.outputs.resolved-environment }}
     steps:
-      - uses: calebsargeant/semantic-release@main
+      - uses: calebsargeant/semantic-release@v1
         id: tbd
         with:
           mode:                        release
+          auth-mode:                   ${{ inputs.auth-mode }}
+          token-broker-url:            ${{ inputs.token-broker-url }}
+          oidc-audience:               ${{ inputs.oidc-audience }}
           versioning-tool:             ${{ inputs.versioning-tool }}
           environment:                 ${{ inputs.environment }}
           environments:                ${{ inputs.environments }}

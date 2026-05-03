@@ -16,8 +16,18 @@ on:
 
 jobs:
   release:
-    uses: calebsargeant/reusable-workflows/.github/workflows/semantic-release.yaml@main
-    with:
-      python_version: '3.11'
-      working_directory: '.'
-    secrets: inherit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./
+        with:
+          mode: release
+          environment: prod
+          environments: '["prod"]'
+          prerelease-identifiers: '{}'
+          github-token: ${{ secrets.GITHUB_TOKEN }}

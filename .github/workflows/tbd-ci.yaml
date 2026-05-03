@@ -58,7 +58,7 @@ jobs:
       packages: write
       pull-requests: read
     steps:
-      - uses: calebsargeant/semantic-release@main
+      - uses: calebsargeant/semantic-release@v1
         with:
           mode: ci
           image_name:              ${{ inputs.image_name }}

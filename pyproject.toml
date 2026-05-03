@@ -5,7 +5,7 @@ major_on_zero = false
 tag_format = "v{version}"
 
 # Current version (maintained by semantic-release — do not edit manually)
-version = "0.1.0"
+version = "1.0.0"
 
 [tool.semantic_release.branches.main]
 match = "(main|master)"

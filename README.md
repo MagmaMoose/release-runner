@@ -4,6 +4,8 @@ A GitHub Marketplace action for semantic release management with built-in Docker
 
 Supports **Trunk-Based Development (TBD)** (single `main` branch) and **Branch-Based Development (BBD)** (one branch per environment) pipelines. Calculates the correct semantic version for any environment, then retags the GHCR image built during CI — no rebuilds for TBD, fresh builds per environment for BBD.
 
+Supports three authentication modes: the workflow `GITHUB_TOKEN`, a bring-your-own GitHub App, or a shared public GitHub App through the Cloudflare Worker token broker in [`worker/`](worker/).
+
 ---
 
 ## The model
@@ -168,19 +170,6 @@ Two modes:
 | `ci` | On every `pull_request` event | Enforces branch naming, builds the Docker image with Bake, pushes `pr-<N>` to GHCR |
 | `release` *(default)* | On merge to trunk or promote PR | Calculates semver, creates git tag + GitHub Release, promotes the Docker image, optionally creates the next environment's promotion PR |
 
-### Reusable workflows (optional convenience wrappers)
-
-`.github/workflows/tbd-ci.yaml` and `.github/workflows/tbd-release.yaml` in this repository are thin wrappers that call the root action. They are useful when you need to call the pipeline at job level (e.g., to add `needs:` dependencies from other jobs), but they offer no additional functionality over the action itself.
-
-| Workflow | Purpose |
-|---|---|
-| `tbd-ci.yaml` | Wraps `mode: ci` |
-| `tbd-release.yaml` | Wraps `mode: release` |
-| `tbd-promote.yaml` | Creates next-env promotion PR (legacy; use `create-promotion-pr: 'true'` instead) |
-| `tbd-deploy-cloud-run.yaml` | Optional: mirrors image to GAR and deploys to Cloud Run |
-
----
-
 ## Docker image lifecycle
 
 The full CI → release → promote flow:
@@ -302,15 +291,18 @@ Example config files for each tool are in [`examples/config/`](examples/config/)
 | `prerelease-identifiers` | | `{"dev":"dev","staging":"rc"}` | JSON map of env → prerelease token |
 | `tag-prefix` | | `v` | Git tag prefix |
 | `deployment-model` | | `tbd` | `tbd`, `tbd-pr`, or `bbd` |
-| `branch-map` | | `''` | JSON map of branch → env. Required for `bbd`. |
+| `branch-map` | (BBD) | `''` | JSON map of branch → env. |
 
 ### Authentication
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `github-token` | ✅ | — | GitHub token for git push, releases, GHCR login, and promotion PRs |
-| `app-id` | | `''` | GitHub App ID. Generates a short-lived token to bypass branch protection |
-| `app-private-key` | | `''` | GitHub App private key (PEM). Required when `app-id` is set |
+| `auth-mode` | | `auto` | `auto`, `github-token`, `private-app`, or `public-app` |
+| `github-token` | | workflow `GITHUB_TOKEN` | Token for default auth and GHCR login |
+| `token-broker-url` | (public app) | `''` | Cloudflare Worker URL for `auth-mode: public-app` |
+| `oidc-audience` | | `semantic-release-token-broker` | Audience used when requesting the GitHub Actions OIDC token |
+| `app-id` | (private app) | `''` | GitHub App ID. Generates a short-lived token to bypass branch protection |
+| `app-private-key` | (private app) | `''` | GitHub App private key (PEM). Required when `app-id` is set |
 
 ### Docker
 
@@ -519,11 +511,53 @@ jobs:
 
 ---
 
-## GitHub App setup (recommended for branch protection)
+## GitHub App auth for branch protection
 
-When `main` is protected, `GITHUB_TOKEN` cannot push the release commit that semantic-release creates. A GitHub App token bypasses branch protection without disabling it.
+When `main` is protected, `GITHUB_TOKEN` often cannot push the release commit, tag, promotion branch, or promotion PR that release tooling creates. A GitHub App can be allowed through branch protection/rulesets without disabling those protections.
 
-**Each organisation creates its own App** — the private key cannot be safely shared, so a single "public" app for everyone is not possible. Setup takes about 5 minutes per organisation:
+A shared public GitHub App is possible, but it requires a hosted token broker because the shared app's private key must stay private. This repo includes a Cloudflare Worker broker in [`worker/`](worker/) for that purpose.
+
+### Option A: Shared public GitHub App (easiest)
+
+Use this when you want users to install one public app and avoid storing any app private key in their repository.
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+  packages: write # only required when image_name is set
+
+steps:
+  - uses: actions/checkout@v4
+  - uses: CalebSargeant/semantic-release@v1
+    with:
+      mode: release
+      auth-mode: public-app
+      token-broker-url: https://YOUR-WORKER.workers.dev
+      oidc-audience: semantic-release-token-broker
+```
+
+How it works:
+
+1. The user installs the public GitHub App on their repository or organisation.
+2. The workflow grants `id-token: write`.
+3. The action requests a GitHub Actions OIDC token for the configured audience.
+4. The action posts that OIDC token to the Cloudflare Worker broker.
+5. The broker verifies issuer, audience, expiry, and the `repository` claim.
+6. The broker checks the app is installed on the requested repo.
+7. The broker returns a short-lived installation token scoped to that single repo.
+
+No private key is stored in the user's repository. The app can only act on repositories where it is installed. For protected branches, the repository or organisation must allow this GitHub App as an actor that may push or bypass according to the branch protection/ruleset configuration.
+
+Public app install URL placeholder:
+
+```text
+https://github.com/apps/YOUR_APP_SLUG/installations/new
+```
+
+### Option B: Bring your own GitHub App (strict/enterprise)
+
+Use this when an organisation does not want to install a third-party shared app, or wants to own the app permissions, private key, and installation lifecycle.
 
 1. Go to **Settings → Developer settings → GitHub Apps → New GitHub App**
    - App name: e.g. `my-org-semantic-release`
@@ -531,8 +565,8 @@ When `main` is protected, `GITHUB_TOKEN` cannot push the release commit that sem
    - Uncheck "Active" under Webhook
 2. Install the app on the target repositories (or all repos in the org)
 3. Note the **App ID** (shown on the app's general settings page)
-4. Generate a **private key** (bottom of the page) — download the `.pem` file
-5. Add these as repository (or organisation) secrets:
+4. Generate a **private key** (bottom of the page) and download the `.pem` file
+5. Add these as repository or organisation secrets:
    - `SEMANTIC_RELEASE_APP_ID` — the numeric App ID
    - `SEMANTIC_RELEASE_APP_PRIVATE_KEY` — the full `.pem` file contents
 6. Pass them to the action:
@@ -541,10 +575,46 @@ When `main` is protected, `GITHUB_TOKEN` cannot push the release commit that sem
 - uses: calebsargeant/semantic-release@v1
   with:
     mode: release
+    auth-mode: private-app
     app-id:          ${{ secrets.SEMANTIC_RELEASE_APP_ID }}
     app-private-key: ${{ secrets.SEMANTIC_RELEASE_APP_PRIVATE_KEY }}
     github-token:    ${{ secrets.GITHUB_TOKEN }}
 ```
+
+### Deploying the token broker
+
+The broker is a Cloudflare Worker TypeScript package in [`worker/`](worker/). It accepts only `POST /token` and returns an installation token only after validating the GitHub Actions OIDC JWT.
+
+1. Create a public GitHub App with repository permissions:
+   - **Contents:** Read and write
+   - **Pull requests:** Read and write
+   - **Metadata:** Read-only
+   - **Workflows:** Read and write only if the action will modify `.github/workflows`
+2. Save the generated private key securely.
+3. Deploy the Worker:
+
+```bash
+cd worker
+npm install
+npx wrangler deploy
+```
+
+4. Add Worker secrets:
+
+```bash
+npx wrangler secret put GITHUB_APP_ID
+npx wrangler secret put GITHUB_APP_PRIVATE_KEY
+npx wrangler secret put OIDC_AUDIENCE
+```
+
+Optional broker settings:
+
+| Setting | Purpose |
+|---|---|
+| `ALLOWED_REPOSITORIES` | Comma-separated allow-list such as `org/repo-a,org/repo-b`. Empty means any repo where the app is installed. |
+| `TOKEN_PERMISSIONS` | JSON or comma-separated permissions. Defaults to `contents:write,pull_requests:write`. |
+
+Keep the private key in Cloudflare Worker secrets only. Do not put it in `wrangler.jsonc`, repository variables, workflow files, or source control.
 
 ---
 
@@ -557,6 +627,9 @@ When `main` is protected, `GITHUB_TOKEN` cannot push the release commit that sem
 | [`.github/workflows/tbd-release.yaml`](.github/workflows/tbd-release.yaml) | Thin wrapper: `mode: release` at job level |
 | [`.github/workflows/tbd-promote.yaml`](.github/workflows/tbd-promote.yaml) | Legacy: create promotion PR for next environment (use `create-promotion-pr: 'true'` instead) |
 | [`.github/workflows/tbd-deploy-cloud-run.yaml`](.github/workflows/tbd-deploy-cloud-run.yaml) | Optional: image promotion + Cloud Run deployment |
+| [`worker/`](worker/) | Cloudflare Worker token broker for the shared public GitHub App auth mode |
+| [`scripts/`](scripts/) | Shell helpers used by the composite action and test suite |
+| [`tests/`](tests/) | Bats and Docker Bake validation tests |
 | [`examples/solo/`](examples/solo/) | Solo (prod-only) caller example |
 | [`examples/dual-env/`](examples/dual-env/) | Dual-environment TBD caller examples |
 | [`examples/tri-env/`](examples/tri-env/) | Tri-environment TBD caller examples |
@@ -580,9 +653,11 @@ A source control branching model where all developers integrate their work direc
 
 ### Branch-Based Development (BBD)
 
-A branching model where each environment has a dedicated long-lived branch (`dev`, `staging`, `main`). Code moves between environments by merging branches in sequence. Each merge triggers a CI rebuild and release for that environment.
+A GitFlow-style branching model where each environment has a dedicated long-lived branch (`dev`, `staging`, `main`). Code moves between environments by merging branches in sequence, similar to how GitFlow moves work from `develop` through release branches and into `main`. Each merge triggers a CI rebuild and release for that environment.
 
-BBD is a more traditional approach; choose it when environment-specific builds are required (e.g. different config baked into the image per environment) or when your team is not yet comfortable with TBD's rapid cadence.
+BBD is the more traditional option. Choose it when environment-specific builds are required (e.g. different config baked into the image per environment), when your organisation still needs GitFlow-like promotion gates, or when your team is not yet comfortable with TBD's rapid cadence.
+
+**Reference:** [A successful Git branching model (GitFlow)](https://nvie.com/posts/a-successful-git-branching-model/)
 
 ### Semantic Versioning (semver)
 

@@ -109,14 +109,19 @@ on:
         required: false
         type: string
         default: 'ubuntu-latest'
-      version_branch_mapping:
+      version_type:
         description: >
-          JSON object mapping branches to version types for image promotion.
-          For a single-trunk TBD setup: {"main": {"type": "stable"}}
-          For tri-env: {"main": {"type": "stable"}, "staging": {"type": "prerelease", "identifier": "rc"}}
+          Which release tags this deployment accepts: stable, prerelease, or any.
+          Production deployments should use stable; staging deployments usually
+          use prerelease with prerelease_identifier.
         required: false
         type: string
-        default: '{"main": {"type": "stable"}}'
+        default: 'stable'
+      prerelease_identifier:
+        description: 'Required when version_type is prerelease (e.g., rc).'
+        required: false
+        type: string
+        default: ''
     outputs:
       url:
         description: 'Deployed Cloud Run service URL'
@@ -139,6 +144,49 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate release tag
+        id: release-tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION_TYPE="${{ inputs.version_type }}"
+          IDENTIFIER="${{ inputs.prerelease_identifier }}"
+
+          if [ -z "${TAG}" ]; then
+            echo "::error::Release tag is empty; refusing to deploy."
+            exit 1
+          fi
+
+          case "${VERSION_TYPE}" in
+            stable)
+              if [[ "${TAG}" == *-* ]]; then
+                echo "::error::Release tag '${TAG}' is a prerelease but this deployment accepts stable tags only."
+                exit 1
+              fi
+              ;;
+            prerelease)
+              if [ -z "${IDENTIFIER}" ]; then
+                echo "::error::version_type prerelease requires prerelease_identifier."
+                exit 1
+              fi
+              if [[ ! "${TAG}" =~ -${IDENTIFIER}\.[0-9]+$ ]]; then
+                echo "::error::Release tag '${TAG}' does not match prerelease identifier '${IDENTIFIER}'."
+                exit 1
+              fi
+              ;;
+            any)
+              ;;
+            *)
+              echo "::error::Unsupported version_type '${VERSION_TYPE}'. Use stable, prerelease, or any."
+              exit 1
+              ;;
+          esac
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release tag '${TAG}' accepted for ${VERSION_TYPE} deployment."
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
@@ -174,12 +222,7 @@ jobs:
           IMAGE_NAME="${OWNER_LOWER}/${{ inputs.image_name }}"
           REGISTRY="ghcr.io"
 
-          # Determine version from release event tag
-          TAG="${{ github.event.release.tag_name }}"
-          if [ -z "${TAG}" ]; then
-            # Fallback: use the latest git tag
-            TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          fi
+          TAG="${{ steps.release-tag.outputs.tag }}"
 
           GHCR_IMAGE="${REGISTRY}/${IMAGE_NAME}:${TAG}"
           echo "ghcr_image=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"

@@ -15,6 +15,8 @@ jobs:
       project_id: my-gcp-preprod-project
       region: africa-south1
       gar_image: africa-south1-docker.pkg.dev/my-gcp-preprod-project/my-repo/api
+      version_type: prerelease
+      prerelease_identifier: rc
       port: '8080'
       cpu: '1'
       memory: '512Mi'
@@ -39,6 +41,7 @@ jobs:
       project_id: my-gcp-prod-project
       region: africa-south1
       gar_image: africa-south1-docker.pkg.dev/my-gcp-prod-project/my-repo/api
+      version_type: stable
       port: '8080'
       cpu: '2'
       memory: '1Gi'
