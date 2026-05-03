@@ -1,54 +1,43 @@
-name: TBD Release — Version & Publish
+name: TBD Release — Version & Promote
 
-# Reusable workflow: runs the calebsargeant/semantic-release action for a given
-# environment in the TBD (or bbd) pipeline. Handles:
-#   1. Version calculation + git tag + GitHub Release (via root action)
-#   2. Docker image promotion — retags GHCR images built during CI to the
-#      new semver tag. No rebuild unless the source image is missing.
+# Thin wrapper around calebsargeant/semantic-release@v1 (mode: release).
+# Prefer using the action directly for full control:
 #
-# Image promotion strategy:
-#   First environment (e.g. dev):
-#     Finds the pr-<N> image built during CI → retags to v1.2.3-dev.1
-#   Subsequent environments (e.g. staging, prod):
-#     Finds the previous version tag (e.g. v1.2.3-dev.1) → retags to v1.2.3-rc.1
-#   Stable release (last environment):
-#     Also updates the :latest tag on each image
-#
-# Supports all versioning tools exposed by the root action:
-#   semantic-release-python, semantic-release-npm, gitversion, release-please
-#
-# Deployment models:
-#   tbd           Pass environment explicitly (default)
-#   bbd           Environment auto-detected from branch name via branch-map
-#   tbd-pr        Environment detected from promote/* PR head branch
+#   jobs:
+#     release:
+#       runs-on: ubuntu-latest
+#       permissions:
+#         contents: write
+#         packages: write
+#         pull-requests: write
+#       steps:
+#         - uses: calebsargeant/semantic-release@v1
+#           with:
+#             mode: release
+#             deployment-model: tbd-pr
+#             create-promotion-pr: 'true'
+#             github-token: ${{ secrets.GITHUB_TOKEN }}
 
 on:
   workflow_call:
     inputs:
 
-      # ── Versioning tool ────────────────────────────────────────────────────
+      # ── Versioning tool ──────────────────────────────────────────────────────
       versioning-tool:
-        description: 'semantic-release-python | semantic-release-npm | gitversion | release-please'
         required: false
         type: string
         default: 'semantic-release-python'
 
-      # ── Environment model ──────────────────────────────────────────────────
+      # ── Environment model ────────────────────────────────────────────────────
       environment:
-        description: |
-          Target environment (must be in environments array).
-          Required for deployment-model: tbd.
-          Omit for deployment-model: bbd or tbd-pr.
         required: false
         type: string
         default: ''
       environments:
-        description: 'JSON array of environments in promotion order. e.g. ["dev","staging","prod"]'
         required: false
         type: string
         default: '["dev", "staging", "prod"]'
       prerelease-identifiers:
-        description: 'JSON map of env → prerelease token. e.g. {"dev":"dev","staging":"rc"}'
         required: false
         type: string
         default: '{"dev": "dev", "staging": "rc"}'
@@ -57,30 +46,26 @@ on:
         type: string
         default: 'v'
 
-      # ── Deployment model ───────────────────────────────────────────────────
+      # ── Deployment model ─────────────────────────────────────────────────────
       deployment-model:
-        description: |
-          tbd           (default) Pass environment explicitly.
-          bbd           Auto-detect environment from branch name via branch-map.
-          tbd-pr        Detect environment from promote/* PR head branch.
         required: false
         type: string
         default: 'tbd'
       branch-map:
-        description: |
-          JSON object mapping branch names → environment names.
-          Only used when deployment-model is bbd.
-          Example: {"dev": "dev", "staging": "staging", "main": "prod"}
         required: false
         type: string
         default: ''
       promote-branch-prefix:
-        description: 'Promotion branch prefix for tbd-pr deployment model (e.g., promote)'
         required: false
         type: string
         default: 'promote'
+      create-promotion-pr:
+        description: 'Create the next environment promotion PR after a prerelease (tbd-pr only)'
+        required: false
+        type: boolean
+        default: false
 
-      # ── Common tool options ────────────────────────────────────────────────
+      # ── Common options ───────────────────────────────────────────────────────
       working-directory:
         required: false
         type: string
@@ -94,19 +79,16 @@ on:
         type: boolean
         default: true
 
-      # ── Docker image promotion (optional) ──────────────────────────────────
+      # ── Docker image promotion ───────────────────────────────────────────────
       image_name:
-        description: 'Base image name (e.g., my-app). Sets IMAGE_NAME=<owner>/<image_name> when reading bake targets.'
         required: false
         type: string
         default: ''
       bake_file:
-        description: 'docker-bake.hcl path'
         required: false
         type: string
         default: 'docker-bake.hcl'
       bake_target:
-        description: 'Bake target or group to promote'
         required: false
         type: string
         default: 'default'
@@ -117,9 +99,9 @@ on:
       platforms:
         required: false
         type: string
-        default: 'linux/amd64,linux/arm64'
+        default: 'linux/amd64'
 
-      # ── GitVersion specific ────────────────────────────────────────────────
+      # ── GitVersion specific ──────────────────────────────────────────────────
       gitversion-spec:
         required: false
         type: string
@@ -128,8 +110,16 @@ on:
         required: false
         type: string
         default: 'GitVersion.yml'
+      gitversion-appsettings-file:
+        required: false
+        type: string
+        default: ''
+      gitversion-appsettings-version-path:
+        required: false
+        type: string
+        default: '.Application.Version'
 
-      # ── release-please specific ────────────────────────────────────────────
+      # ── release-please specific ──────────────────────────────────────────────
       release-please-release-type:
         required: false
         type: string
@@ -139,7 +129,7 @@ on:
         type: string
         default: 'release-please-config.json'
 
-      # ── Runner ─────────────────────────────────────────────────────────────
+      # ── Runner ───────────────────────────────────────────────────────────────
       runner:
         required: false
         type: string
@@ -154,430 +144,71 @@ on:
         value: ${{ jobs.release.outputs.tag }}
       is-prerelease:
         description: '"true" if this is a prerelease'
-        value: ${{ jobs.release.outputs.is_prerelease }}
+        value: ${{ jobs.release.outputs.is-prerelease }}
       released:
         description: '"true" if a new version was published'
         value: ${{ jobs.release.outputs.released }}
       prerelease-identifier:
         description: 'The prerelease identifier (e.g., dev, rc). Empty for production.'
-        value: ${{ jobs.release.outputs.prerelease_identifier }}
+        value: ${{ jobs.release.outputs.prerelease-identifier }}
       resolved-environment:
-        description: 'The environment that was targeted (useful for bbd and tbd-pr modes)'
-        value: ${{ jobs.release.outputs.resolved_environment }}
+        description: 'The environment that was targeted'
+        value: ${{ jobs.release.outputs.resolved-environment }}
 
     secrets:
       GITHUB_TOKEN_RELEASE:
-        description: 'GitHub token or PAT for release operations (defaults to GITHUB_TOKEN)'
         required: false
       SEMANTIC_RELEASE_APP_ID:
-        description: 'GitHub App ID (optional, for bypassing branch protection)'
         required: false
       SEMANTIC_RELEASE_APP_PRIVATE_KEY:
-        description: 'GitHub App private key'
         required: false
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOBS
 # ─────────────────────────────────────────────────────────────────────────────
 jobs:
 
-  # ── 1. Semantic versioning + GitHub Release ─────────────────────────────────
   release:
     name: Release (${{ inputs.environment || 'auto' }})
     runs-on: ${{ inputs.runner }}
     permissions:
       contents: write
+      packages: write
+      pull-requests: write
       id-token: write
     outputs:
       version:              ${{ steps.tbd.outputs.version }}
       tag:                  ${{ steps.tbd.outputs.tag }}
-      is_prerelease:        ${{ steps.tbd.outputs.is-prerelease }}
+      is-prerelease:        ${{ steps.tbd.outputs.is-prerelease }}
       released:             ${{ steps.tbd.outputs.released }}
-      prerelease_identifier: ${{ steps.tbd.outputs.prerelease-identifier }}
-      resolved_environment: ${{ steps.tbd.outputs.resolved-environment }}
+      prerelease-identifier: ${{ steps.tbd.outputs.prerelease-identifier }}
+      resolved-environment: ${{ steps.tbd.outputs.resolved-environment }}
     steps:
-      - name: Run TBD Release
+      - uses: calebsargeant/semantic-release@main
         id: tbd
-        uses: calebsargeant/semantic-release@main
         with:
+          mode:                        release
           versioning-tool:             ${{ inputs.versioning-tool }}
           environment:                 ${{ inputs.environment }}
           environments:                ${{ inputs.environments }}
           prerelease-identifiers:      ${{ inputs.prerelease-identifiers }}
           tag-prefix:                  ${{ inputs.tag-prefix }}
-          working-directory:           ${{ inputs.working-directory }}
-          create-release:              ${{ inputs.create-release }}
-          changelog:                   ${{ inputs.changelog }}
           deployment-model:            ${{ inputs.deployment-model }}
           branch-map:                  ${{ inputs.branch-map }}
           promote-branch-prefix:       ${{ inputs.promote-branch-prefix }}
+          create-promotion-pr:         ${{ inputs.create-promotion-pr }}
+          working-directory:           ${{ inputs.working-directory }}
+          create-release:              ${{ inputs.create-release }}
+          changelog:                   ${{ inputs.changelog }}
+          image_name:                  ${{ inputs.image_name }}
+          bake_file:                   ${{ inputs.bake_file }}
+          bake_target:                 ${{ inputs.bake_target }}
+          registry:                    ${{ inputs.registry }}
+          platforms:                   ${{ inputs.platforms }}
+          gitversion-spec:             ${{ inputs.gitversion-spec }}
+          gitversion-config:           ${{ inputs.gitversion-config }}
+          gitversion-appsettings-file: ${{ inputs.gitversion-appsettings-file }}
+          gitversion-appsettings-version-path: ${{ inputs.gitversion-appsettings-version-path }}
+          release-please-release-type: ${{ inputs.release-please-release-type }}
+          release-please-config-file:  ${{ inputs.release-please-config-file }}
           github-token:                ${{ secrets.GITHUB_TOKEN_RELEASE || secrets.GITHUB_TOKEN }}
           app-id:                      ${{ secrets.SEMANTIC_RELEASE_APP_ID }}
           app-private-key:             ${{ secrets.SEMANTIC_RELEASE_APP_PRIVATE_KEY }}
-          gitversion-spec:             ${{ inputs.gitversion-spec }}
-          gitversion-config:           ${{ inputs.gitversion-config }}
-          release-please-release-type: ${{ inputs.release-please-release-type }}
-          release-please-config-file:  ${{ inputs.release-please-config-file }}
-
-  # ── 2. Resolve image promotion strategy ────────────────────────────────────
-  # Runs only when a new version was released AND image_name is configured.
-  # Determines whether this is the first environment (→ find pr-N source)
-  # or a subsequent environment (→ find previous version tag source).
-  # Also derives the image list from the bake file.
-  setup-images:
-    name: Resolve Image Promotion Strategy
-    needs: release
-    if: needs.release.outputs.released == 'true' && inputs.image_name != ''
-    runs-on: ubuntu-latest
-    outputs:
-      images:              ${{ steps.resolve.outputs.images }}
-      is_first_env:        ${{ steps.resolve.outputs.is_first_env }}
-      prev_env_identifier: ${{ steps.resolve.outputs.prev_env_identifier }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
-      - name: Resolve promotion strategy and image list
-        id: resolve
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ENV="${{ needs.release.outputs.resolved_environment }}"
-          ENVS='${{ inputs.environments }}'
-          IDS='${{ inputs.prerelease-identifiers }}'
-          DEPLOY_MODEL="${{ inputs.deployment-model }}"
-
-          echo "Deployment model: ${DEPLOY_MODEL}"
-          echo "Environments: ${ENVS}  |  Current: ${ENV}"
-
-          # Image promotion strategy differs by deployment model:
-          #
-          # TBD / TBD-PR:
-          #   First env (e.g. dev) → find pr-<N> built during CI, retag to v1.2.3-dev.1
-          #   Subsequent envs     → find previous semver tag (e.g. v1.2.3-dev.1), retag to v1.2.3-rc.1
-          #   (No rebuild — images flow forward unchanged through all envs)
-          #
-          # BBD (Branch-Based Development):
-          #   Every env has its own PR → CI rebuilds fresh for each env → tags pr-<N>
-          #   So every env looks for its own pr-<N> image (always "first env" strategy)
-
-          if [ "${DEPLOY_MODEL}" == "bbd" ]; then
-            echo "BBD mode — every environment uses its own pr-<N> image (fresh build per env PR)"
-            echo "is_first_env=true"    >> "$GITHUB_OUTPUT"
-            echo "prev_env_identifier=" >> "$GITHUB_OUTPUT"
-          else
-            # TBD / TBD-PR: first env looks for pr-N, subsequent envs retag from previous
-            FIRST_ENV=$(echo "${ENVS}" | jq -r '.[0]')
-            if [ "${ENV}" == "${FIRST_ENV}" ]; then
-              echo "TBD mode — first environment → will look for pr-<N> image"
-              echo "is_first_env=true"       >> "$GITHUB_OUTPUT"
-              echo "prev_env_identifier="    >> "$GITHUB_OUTPUT"
-            else
-              ENV_INDEX=$(echo "${ENVS}" | jq -r --arg env "${ENV}" 'index($env)')
-              PREV_ENV=$(echo "${ENVS}" | jq -r --argjson idx "${ENV_INDEX}" '.[$idx - 1]')
-              PREV_IDENTIFIER=$(echo "${IDS}" | jq -r --arg e "${PREV_ENV}" '.[$e] // "dev"')
-              echo "TBD mode — subsequent environment → will retag from ${PREV_IDENTIFIER} version tag"
-              echo "is_first_env=false"                       >> "$GITHUB_OUTPUT"
-              echo "prev_env_identifier=${PREV_IDENTIFIER}"   >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
-          # Set env vars so bake evaluates correctly
-          export REGISTRY="${{ inputs.registry }}"
-          export IMAGE_NAME="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')/${{ inputs.image_name }}"
-          export VERSION="_probe_"
-          export PLATFORMS="${{ inputs.platforms }}"
-
-          BAKE_OUTPUT=$(docker buildx bake \
-            -f "${{ inputs.bake_file }}" "${{ inputs.bake_target }}" \
-            --print 2>/dev/null)
-
-          # Build images JSON array: [{target: "api", image: "ghcr.io/org/my-app-api"}, ...]
-          IMAGES=$(echo "${BAKE_OUTPUT}" | jq -c '
-            .target | to_entries | map({
-              target: .key,
-              image: (.value.tags[0] // "" | split(":")[0])
-            }) | select(length > 0)
-          ')
-          echo "images=${IMAGES}" >> "$GITHUB_OUTPUT"
-          echo "Discovered images: ${IMAGES}"
-
-  # ── 3. Promote (retag) or build each image ─────────────────────────────────
-  # Matrix over the images array. For each image:
-  #   a) Resolve the source GHCR tag (pr-N or previous semver)
-  #   b) Retag source → new version tag  (no layer download — manifest copy)
-  #   c) If source not found, fall back to a fresh docker buildx bake
-  promote-images:
-    name: Promote ${{ matrix.image.target }}
-    needs: [release, setup-images]
-    if: needs.setup-images.result == 'success'
-    runs-on: ${{ inputs.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        image: ${{ fromJSON(needs.setup-images.outputs.images) }}
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      # ── Resolve which GHCR tag to use as the promotion source ────────────
-      - name: Resolve source image tag
-        id: source
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
-        env:
-          IS_FIRST_ENV:    ${{ needs.setup-images.outputs.is_first_env }}
-          PREV_IDENTIFIER: ${{ needs.setup-images.outputs.prev_env_identifier }}
-          NEW_TAG:         ${{ needs.release.outputs.tag }}
-          FULL_IMAGE:      ${{ matrix.image.image }}
-          TAG_PREFIX:      ${{ inputs.tag-prefix }}
-        with:
-          script: |
-            const isFirstEnv     = process.env.IS_FIRST_ENV === 'true';
-            const fullImage      = process.env.FULL_IMAGE;
-            const newTag         = process.env.NEW_TAG;         // e.g. v1.2.3-rc.1
-            const tagPrefix      = process.env.TAG_PREFIX || 'v';
-            const prevIdentifier = process.env.PREV_IDENTIFIER; // e.g. dev
-
-            core.setOutput('full_image',          fullImage);
-            core.setOutput('target_version_tag',  `${fullImage}:${newTag}`);
-
-            let sourceTag = '';
-
-            if (isFirstEnv) {
-              // ── First environment: find the PR that was merged ──────────
-              // semantic-release creates a commit "chore(release): vX.Y.Z" on top of
-              // the merge commit, so we walk up the parent chain to find the PR.
-              console.log(`First env — looking for PR associated with tag: ${newTag}`);
-              try {
-                const { data: ref } = await github.rest.git.getRef({
-                  owner: context.repo.owner,
-                  repo:  context.repo.repo,
-                  ref:   `tags/${newTag}`,
-                });
-                let commitSha = ref.object.sha;
-
-                // Unwrap annotated tags
-                if (ref.object.type === 'tag') {
-                  const { data: tag } = await github.rest.git.getTag({
-                    owner:   context.repo.owner,
-                    repo:    context.repo.repo,
-                    tag_sha: ref.object.sha,
-                  });
-                  commitSha = tag.object.sha;
-                }
-                console.log(`Tag points to commit: ${commitSha}`);
-
-                let prNumber = null;
-
-                // Strategy 1: GitHub API — PRs directly associated with the commit
-                const { data: directPrs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                  owner:      context.repo.owner,
-                  repo:       context.repo.repo,
-                  commit_sha: commitSha,
-                });
-                const directMerged = directPrs.find(pr => pr.merged_at);
-                if (directMerged) prNumber = directMerged.number;
-
-                // Strategy 2: Walk up to 4 parent commits
-                //   (needed for semantic-release: release commit → merge commit → ...)
-                if (!prNumber) {
-                  const { data: rootCommit } = await github.rest.git.getCommit({
-                    owner:      context.repo.owner,
-                    repo:       context.repo.repo,
-                    commit_sha: commitSha,
-                  });
-
-                  // Check root commit message for PR reference
-                  const rootMatch = rootCommit.message.match(
-                    /(?:Merge pull request #|[Pp]ull [Rr]equest #|\(#)(\d+)/
-                  );
-                  if (rootMatch) prNumber = parseInt(rootMatch[1], 10);
-
-                  // Walk parents
-                  let currentSha = rootCommit.parents?.[0]?.sha;
-                  for (let depth = 0; depth < 4 && currentSha && !prNumber; depth++) {
-                    const { data: parent } = await github.rest.git.getCommit({
-                      owner:      context.repo.owner,
-                      repo:       context.repo.repo,
-                      commit_sha: currentSha,
-                    });
-
-                    const parentMatch = parent.message.match(
-                      /(?:Merge pull request #|[Pp]ull [Rr]equest #|\(#)(\d+)/
-                    );
-                    if (parentMatch) {
-                      prNumber = parseInt(parentMatch[1], 10);
-                      break;
-                    }
-
-                    const { data: parentPrs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                      owner:      context.repo.owner,
-                      repo:       context.repo.repo,
-                      commit_sha: currentSha,
-                    });
-                    const parentMerged = parentPrs.find(pr => pr.merged_at);
-                    if (parentMerged) {
-                      prNumber = parentMerged.number;
-                      break;
-                    }
-
-                    currentSha = parent.parents?.[0]?.sha;
-                  }
-                }
-
-                if (prNumber) {
-                  sourceTag = `${fullImage}:pr-${prNumber}`;
-                  console.log(`Found PR #${prNumber} → source: ${sourceTag}`);
-                } else {
-                  core.warning('Could not find merged PR for this release. Will fall back to fresh build.');
-                }
-
-              } catch (err) {
-                core.warning(`Error finding PR for tag ${newTag}: ${err.message}. Will fall back to fresh build.`);
-              }
-
-            } else {
-              // ── Subsequent environment: find the previous version tag ───
-              // e.g. releasing v1.2.3-rc.1 (staging) — source is v1.2.3-dev.1 (dev)
-              const version     = newTag.startsWith(tagPrefix) ? newTag.slice(tagPrefix.length) : newTag;
-              // Strip the last prerelease segment:  1.2.3-rc.1 → 1.2.3  OR  1.2.3 → 1.2.3
-              const baseVersion = version.replace(/-[a-zA-Z][^.]*\.[0-9]+$/, '');
-              const searchRef   = `tags/${tagPrefix}${baseVersion}-${prevIdentifier}.`;
-              console.log(`Subsequent env — looking for previous version matching: ${searchRef}*`);
-
-              try {
-                const { data: matchingRefs } = await github.rest.git.listMatchingRefs({
-                  owner: context.repo.owner,
-                  repo:  context.repo.repo,
-                  ref:   searchRef,
-                });
-
-                if (matchingRefs.length > 0) {
-                  // Sort by numeric suffix descending, take the highest
-                  const sorted = matchingRefs
-                    .map(r => r.ref.replace('refs/tags/', ''))
-                    .sort((a, b) => {
-                      const numA = parseInt(a.split('.').pop() || '0', 10);
-                      const numB = parseInt(b.split('.').pop() || '0', 10);
-                      return numB - numA;
-                    });
-                  const latestPrevTag = sorted[0];
-                  sourceTag = `${fullImage}:${latestPrevTag}`;
-                  console.log(`Found previous version: ${latestPrevTag} → source: ${sourceTag}`);
-                } else {
-                  core.warning(`No tags found matching ${searchRef}*. Will fall back to fresh build.`);
-                }
-              } catch (err) {
-                core.warning(`Error looking up previous version tags: ${err.message}. Will fall back to fresh build.`);
-              }
-            }
-
-            core.setOutput('source_tag', sourceTag);
-
-      # ── Set up Docker ─────────────────────────────────────────────────────
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
-        with:
-          registry: ${{ inputs.registry }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # ── Retag source → new version (manifest copy, no layer download) ────
-      - name: Promote image
-        id: promote
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SOURCE="${{ steps.source.outputs.source_tag }}"
-          VERSION_TAG="${{ steps.source.outputs.target_version_tag }}"
-          FULL_IMAGE="${{ steps.source.outputs.full_image }}"
-          IS_PRERELEASE="${{ needs.release.outputs.is_prerelease }}"
-
-          if [ -z "${SOURCE}" ]; then
-            echo "promoted=false" >> "$GITHUB_OUTPUT"
-            echo "No source tag resolved — will perform fresh build"
-            exit 0
-          fi
-
-          # Verify the source image actually exists in GHCR
-          SOURCE_DIGEST=$(docker buildx imagetools inspect "${SOURCE}" \
-            --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"' || echo "")
-
-          if [ -z "${SOURCE_DIGEST}" ]; then
-            echo "promoted=false" >> "$GITHUB_OUTPUT"
-            echo "Source image not found or inaccessible: ${SOURCE}"
-            echo "   Will perform fresh build"
-            exit 0
-          fi
-
-          echo "Source digest: ${SOURCE_DIGEST}"
-          echo "Promoting: ${SOURCE} → ${VERSION_TAG}"
-
-          if [ "${IS_PRERELEASE}" == "false" ]; then
-            # Stable release: also update the :latest tag
-            docker buildx imagetools create \
-              --tag "${VERSION_TAG}" \
-              --tag "${FULL_IMAGE}:latest" \
-              "${SOURCE}"
-            echo "Promoted to ${VERSION_TAG} and updated :latest"
-          else
-            docker buildx imagetools create \
-              --tag "${VERSION_TAG}" \
-              "${SOURCE}"
-            echo "Promoted to ${VERSION_TAG}"
-          fi
-
-          echo "promoted=true" >> "$GITHUB_OUTPUT"
-
-      # ── Fallback: fresh build when source image is unavailable ───────────
-      - name: Fresh build (fallback)
-        id: fresh-build
-        if: steps.promote.outputs.promoted != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          VERSION_TAG="${{ steps.source.outputs.target_version_tag }}"
-          FULL_IMAGE="${{ steps.source.outputs.full_image }}"
-          IS_PRERELEASE="${{ needs.release.outputs.is_prerelease }}"
-          BAKE_FILE="${{ inputs.bake_file }}"
-          BAKE_TARGET="${{ matrix.image.target }}"
-
-          echo "Performing fresh build: ${FULL_IMAGE}"
-          echo "   Bake file:   ${BAKE_FILE}"
-          echo "   Bake target: ${BAKE_TARGET}"
-
-          TAGS=(--set "*.tags=${VERSION_TAG}")
-          if [ "${IS_PRERELEASE}" == "false" ]; then
-            TAGS+=(--set "*.tags=${FULL_IMAGE}:latest")
-          fi
-
-          docker buildx bake \
-            -f "${BAKE_FILE}" \
-            "${BAKE_TARGET}" \
-            "${TAGS[@]}" \
-            --set "*.cache-from=type=gha,scope=buildkit-${{ matrix.image.target }}" \
-            --set "*.cache-to=type=gha,mode=max,scope=buildkit-${{ matrix.image.target }}" \
-            --push
-
-          echo "Fresh build complete: ${VERSION_TAG}"
-        env:
-          VERSION:    ${{ needs.release.outputs.version }}
-          REGISTRY:   ${{ inputs.registry }}
-          IMAGE_NAME: >-
-            ${{ format('{0}/{1}', github.repository_owner, inputs.image_name) }}
-          PLATFORMS:  ${{ inputs.platforms }}

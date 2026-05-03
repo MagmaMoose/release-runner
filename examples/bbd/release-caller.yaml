@@ -5,11 +5,17 @@ on:
     paths-ignore: ['**.md', '.gitignore', 'LICENSE', 'CHANGELOG.md']
 jobs:
   release:
-    uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
-    with:
-      deployment-model: bbd
-      branch-map: '{"dev": "dev", "staging": "staging", "main": "prod"}'
-      environments: '["dev", "staging", "prod"]'
-      prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-      image_name: my-app
-    secrets: inherit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: calebsargeant/semantic-release@v1
+        with:
+          mode: release
+          deployment-model: bbd
+          branch-map: '{"dev": "dev", "staging": "staging", "main": "prod"}'
+          environments: '["dev", "staging", "prod"]'
+          prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
+          image_name: my-app
+          github-token: ${{ secrets.GITHUB_TOKEN }}

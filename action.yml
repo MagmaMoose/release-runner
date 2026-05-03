@@ -1,9 +1,8 @@
-name: 'TBD Release'
+name: 'semantic-release'
 description: >
-  Trunk-Based Development semantic release management.
-  Calculates the correct semantic version for any environment in a
-  dual-, tri-, or quad-environment TBD pipeline.
-  Supports python-semantic-release, semantic-release (npm),
+  All-in-one semantic release management for TBD and BBD pipelines.
+  Handles Docker CI builds, versioning, image promotion, and promotion PR creation
+  from a single action. Supports python-semantic-release, semantic-release (npm),
   GitVersion, and release-please.
 
 branding:
@@ -14,6 +13,16 @@ branding:
 # INPUTS
 # ─────────────────────────────────────────────────────────────────────────────
 inputs:
+
+  # ── Mode ─────────────────────────────────────────────────────────────────
+  mode:
+    description: |
+      ci       Build Docker image and push pr-<N> to GHCR (run on pull_request events).
+      release  (default) Run versioning, promote Docker image, and optionally
+               create a promotion PR (when deployment-model is tbd-pr and
+               create-promotion-pr is true).
+    required: false
+    default: 'release'
 
   # ── Versioning tool ──────────────────────────────────────────────────────
   versioning-tool:
@@ -30,15 +39,10 @@ inputs:
   deployment-model:
     description: |
       Controls how the target environment is determined.
-        tbd       (default) Trunk-Based Development. Pass `environment`
-                  explicitly (or derive it from workflow_dispatch inputs).
-                  One branch (main/trunk) — environment is the promotion target.
-        bbd       Branch-Based Development. The environment is inferred from
-                  the current branch using `branch-map`.
-                  Do not pass `environment` — it is resolved automatically.
-        tbd-pr    TBD with PR-based promotion. Environment is detected from
-                  the head branch of a merged promote/* PR (tbd-pr model).
-                  Pass `promote-branch-prefix` to configure the branch prefix.
+        tbd       (default) Trunk-Based Development. Pass `environment` explicitly.
+        bbd       Branch-Based Development. Environment inferred from branch-map.
+        tbd-pr    TBD with PR-based promotion. Environment detected from the merged
+                  promote/* PR head branch.
     required: false
     default: 'tbd'
 
@@ -46,29 +50,35 @@ inputs:
     description: |
       JSON object mapping branch names to environment names.
       Only used when deployment-model is bbd.
-      Branch names are exact matches against GITHUB_REF_NAME.
       Example: {"dev": "dev", "staging": "staging", "main": "prod"}
-      The environment names must match entries in the `environments` array.
     required: false
     default: ''
 
   promote-branch-prefix:
     description: |
-      Only used when deployment-model is tbd-pr.
-      Branch prefix for promotion PRs.
-      Example: if prefix is 'promote' and the merged PR branch is
-      'promote/staging/1.2.3-dev.1', the environment resolves to 'staging'.
+      Prefix for promotion PR branches (deployment-model: tbd-pr).
+      Example: 'promote' → branch promote/staging/1.2.3-dev.1
     required: false
     default: 'promote'
+
+  promote-target-branch:
+    description: 'Target branch for promotion PRs.'
+    required: false
+    default: 'main'
+
+  create-promotion-pr:
+    description: |
+      When true, automatically creates the next environment promotion PR after a
+      prerelease (deployment-model: tbd-pr only). Set to false when using the
+      tbd-promote reusable workflow separately.
+    required: false
+    default: 'false'
 
   # ── Environment model ────────────────────────────────────────────────────
   environment:
     description: |
-      The target environment for this run.
-      Must be one of the values in `environments`.
-      The LAST value in `environments` is always the production (stable) env.
+      The target environment for this run. Must be in `environments`.
       Required when deployment-model is tbd.
-      Omit when deployment-model is bbd (auto-detected from branch-map).
     required: false
     default: ''
 
@@ -76,45 +86,34 @@ inputs:
     description: |
       JSON array of environment names in promotion order.
       The last entry is always treated as production (stable semver).
-
-      Built-in profiles (use as-is or override):
-        dual:  ["dev", "prod"]
-        tri:   ["dev", "staging", "prod"]    ← default
-        quad:  ["dev", "tst", "acc", "prd"]
+      Profiles: ["dev","prod"] | ["dev","staging","prod"] | ["dev","tst","acc","prd"]
     required: false
     default: '["dev", "staging", "prod"]'
 
   prerelease-identifiers:
     description: |
       JSON object mapping environment names to prerelease identifier strings.
-      The production environment (last in `environments`) is always stable
-      and must be omitted from this map.
-
-      Built-in defaults:
-        tri:   {"dev": "dev", "staging": "rc"}
-        quad:  {"dev": "dev", "tst": "alpha", "acc": "beta"}
+      The production environment must be omitted from this map.
+      Example: {"dev": "dev", "staging": "rc"}
     required: false
     default: '{"dev": "dev", "staging": "rc"}'
 
   tag-prefix:
-    description: 'Version tag prefix. Default: v'
+    description: 'Version tag prefix.'
     required: false
     default: 'v'
 
   # ── Authentication ────────────────────────────────────────────────────────
   github-token:
     description: |
-      GitHub token used for git push, tag creation, and GitHub Releases.
-      Use secrets.GITHUB_TOKEN for read/write access to the current repo,
-      or a PAT / GitHub App token to bypass branch protection rules.
+      GitHub token for git push, tag creation, GitHub Releases, GHCR login,
+      and promotion PR creation.
     required: true
 
   app-id:
     description: |
-      GitHub App ID. When provided together with app-private-key, a short-lived
-      installation token is generated and used instead of github-token.
-      Recommended for repos with branch protection on main — allows the
-      release commit and tag to be pushed without disabling protection.
+      GitHub App ID. When provided with app-private-key, generates a short-lived
+      token to bypass branch protection rules.
     required: false
     default: ''
 
@@ -123,29 +122,69 @@ inputs:
     required: false
     default: ''
 
-  # ── Common tool options ───────────────────────────────────────────────────
+  # ── Docker ────────────────────────────────────────────────────────────────
+  image_name:
+    description: |
+      Base image name without registry or owner prefix (e.g., my-app).
+      Sets IMAGE_NAME=<owner>/<image_name> for the bake file.
+      Required for mode: ci. When set in mode: release, images are promoted after versioning.
+    required: false
+    default: ''
+
+  bake_file:
+    description: 'Path to docker-bake.hcl'
+    required: false
+    default: 'docker-bake.hcl'
+
+  bake_target:
+    description: |
+      Bake target or group to build/promote.
+      Groups are expanded — all sub-targets are built/promoted automatically.
+    required: false
+    default: 'default'
+
+  registry:
+    description: 'Container registry'
+    required: false
+    default: 'ghcr.io'
+
+  platforms:
+    description: 'Target platforms (comma-separated) for CI builds and fallback fresh builds.'
+    required: false
+    default: 'linux/amd64'
+
+  # ── CI-specific ──────────────────────────────────────────────────────────
+  enforce_branch_naming:
+    description: |
+      Enforce TBD branch naming convention on PRs (mode: ci).
+      Allowed prefixes: feat, fix, chore, hotfix, docs, refactor, perf, test, ci, style.
+      Set to false for BBD (branches are named after environments).
+    required: false
+    default: 'true'
+
+  # ── Common release options ────────────────────────────────────────────────
   working-directory:
     description: |
       Working directory containing the versioning config file.
-      For semantic-release-python: contains pyproject.toml
-      For semantic-release-npm:    contains .releaserc.json / package.json
-      For gitversion:              contains GitVersion.yml
+      For semantic-release-python: pyproject.toml
+      For semantic-release-npm:    .releaserc.json / package.json
+      For gitversion:              GitVersion.yml
     required: false
     default: '.'
 
   create-release:
-    description: 'Create a GitHub Release. Set to "false" for non-prod environments if preferred.'
+    description: 'Create a GitHub Release on every version bump.'
     required: false
     default: 'true'
 
   changelog:
-    description: 'Generate/update CHANGELOG.md (supported by semantic-release-python and semantic-release-npm).'
+    description: 'Generate/update CHANGELOG.md (semantic-release-python and semantic-release-npm).'
     required: false
     default: 'true'
 
   # ── GitVersion-specific ───────────────────────────────────────────────────
   gitversion-spec:
-    description: 'GitVersion version spec (e.g., 6.x, 5.x). Only used when versioning-tool is gitversion.'
+    description: 'GitVersion version spec (e.g., 6.x). Only used when versioning-tool is gitversion.'
     required: false
     default: '6.x'
 
@@ -156,15 +195,14 @@ inputs:
 
   gitversion-appsettings-file:
     description: |
-      Path to a JSON file (e.g., appsettings.json) where the version should be
-      injected. Only used when versioning-tool is gitversion.
-      Uses jq to update the key at gitversion-appsettings-version-path.
+      Path to a JSON file (e.g., appsettings.json) where the version is injected
+      and committed back to the branch. Only used when versioning-tool is gitversion.
     required: false
     default: ''
 
   gitversion-appsettings-version-path:
     description: |
-      jq path expression for the version field in the appsettings file.
+      jq path for the version field in the appsettings file.
       Only used when gitversion-appsettings-file is set.
       Example: .Application.Version
     required: false
@@ -172,14 +210,12 @@ inputs:
 
   # ── release-please-specific ───────────────────────────────────────────────
   release-please-release-type:
-    description: |
-      release-please release type (e.g., python, node, simple, go).
-      Only used when versioning-tool is release-please.
+    description: 'release-please release type (python, node, simple, go, etc.).'
     required: false
     default: 'simple'
 
   release-please-config-file:
-    description: 'Path to release-please-config.json. Only used when versioning-tool is release-please.'
+    description: 'Path to release-please-config.json.'
     required: false
     default: 'release-please-config.json'
 
@@ -200,10 +236,10 @@ outputs:
     description: '"true" if a new version was created and published'
     value: ${{ steps.normalize.outputs.released }}
   prerelease-identifier:
-    description: 'The prerelease identifier for this environment (e.g., dev, rc, alpha). Empty for production.'
+    description: 'The prerelease identifier (e.g., dev, rc, alpha). Empty for production.'
     value: ${{ steps.detect-env.outputs.prerelease_identifier }}
   resolved-environment:
-    description: 'The resolved environment name (echoes the environment input after validation)'
+    description: 'The resolved environment name.'
     value: ${{ steps.detect-env.outputs.environment }}
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -230,9 +266,81 @@ runs:
         fetch-tags: true
         token: ${{ steps.app-token.outputs.token || inputs.github-token }}
 
-    # ── 3. Detect environment & resolve prerelease config ───────────────────
+    # ═════════════════════════════════════════════════════════════════════════
+    # CI MODE — build and push pr-<N> image
+    # ═════════════════════════════════════════════════════════════════════════
+
+    - name: Check TBD branch naming
+      if: inputs.mode == 'ci' && inputs.enforce_branch_naming == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      run: |
+        BRANCH="${GITHUB_HEAD_REF}"
+        ALLOWED='^(feat|fix|chore|hotfix|docs|refactor|perf|test|ci|style)/'
+        if echo "${BRANCH}" | grep -qE "${ALLOWED}"; then
+          echo "Branch '${BRANCH}' follows TBD naming convention."
+        else
+          echo "::error::Branch '${BRANCH}' does not follow TBD naming convention."
+          echo "::error::Expected format: <type>/<description>"
+          echo "::error::Allowed types: feat, fix, chore, hotfix, docs, refactor, perf, test, ci, style"
+          exit 1
+        fi
+
+    - name: Set up QEMU
+      if: inputs.mode == 'ci' && inputs.image_name != ''
+      uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+    - name: Set up Docker Buildx (CI)
+      if: inputs.mode == 'ci' && inputs.image_name != ''
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+    - name: Log in to GHCR (CI)
+      if: inputs.mode == 'ci' && inputs.image_name != ''
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ github.actor }}
+        password: ${{ inputs.github-token }}
+
+    - name: Build and push pr-<N>
+      if: inputs.mode == 'ci' && inputs.image_name != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+        export IMAGE_NAME="${OWNER_LOWER}/${{ inputs.image_name }}"
+
+        echo "IMAGE_NAME: ${IMAGE_NAME}"
+        echo "VERSION:    ${VERSION}"
+
+        TARGETS=$(docker buildx bake \
+          -f "${{ inputs.bake_file }}" "${{ inputs.bake_target }}" \
+          --print 2>/dev/null | jq -r '.target | keys[]')
+
+        CACHE_ARGS=()
+        for TARGET in ${TARGETS}; do
+          SCOPE="bk-${TARGET}-${{ github.ref_name }}"
+          CACHE_ARGS+=(--set "${TARGET}.cache-from=type=gha,scope=${SCOPE}")
+          CACHE_ARGS+=(--set "${TARGET}.cache-to=type=gha,mode=max,scope=${SCOPE}")
+        done
+
+        docker buildx bake \
+          -f "${{ inputs.bake_file }}" \
+          "${{ inputs.bake_target }}" \
+          "${CACHE_ARGS[@]}" \
+          --push
+      env:
+        VERSION: pr-${{ github.event.pull_request.number }}
+        REGISTRY: ${{ inputs.registry }}
+        PLATFORMS: ${{ inputs.platforms }}
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # RELEASE MODE — versioning
+    # ═════════════════════════════════════════════════════════════════════════
+
     - name: Detect environment
       id: detect-env
+      if: inputs.mode == 'release'
       shell: bash
       run: |
         set -euo pipefail
@@ -247,78 +355,66 @@ runs:
         echo "Environments:     ${ENVS}"
         echo "Identifiers:      ${IDS}"
 
-        # ── Branch-Based Development: infer environment from current branch ─
         if [ "${DEPLOY_MODEL}" == "bbd" ]; then
           if [ -z "${BRANCH_MAP}" ] || [ "${BRANCH_MAP}" == '{}' ] || [ "${BRANCH_MAP}" == 'null' ]; then
             echo "::error::deployment-model is 'bbd' but branch-map is empty."
-            echo "::error::Set branch-map to a JSON object like: {\"dev\": \"dev\", \"main\": \"prod\"}"
             exit 1
           fi
           BRANCH="${GITHUB_REF_NAME}"
-          echo "BBD mode: current branch is '${BRANCH}'"
           DETECTED_ENV=$(echo "${BRANCH_MAP}" | jq -r --arg b "${BRANCH}" '.[$b] // empty')
           if [ -z "${DETECTED_ENV}" ]; then
             echo "::error::Branch '${BRANCH}' has no mapping in branch-map: ${BRANCH_MAP}"
-            echo "::error::Add an entry for this branch or switch to deployment-model: tbd"
             exit 1
           fi
           ENV="${DETECTED_ENV}"
-          echo "Resolved environment '${ENV}' from branch '${BRANCH}'"
+          echo "BBD: resolved environment '${ENV}' from branch '${BRANCH}'"
         fi
 
-        # ── TBD with PR-based promotion: extract env from head branch ───────────────
         if [ "${DEPLOY_MODEL}" == "tbd-pr" ]; then
           BRANCH_PREFIX="${{ inputs.promote-branch-prefix }}"
-          HEAD_REF="${GITHUB_HEAD_REF}"  # set by GitHub on pull_request events
+          HEAD_REF="${GITHUB_HEAD_REF}"
           if [ -n "${HEAD_REF}" ] && echo "${HEAD_REF}" | grep -qE "^${BRANCH_PREFIX}/[^/]+/"; then
-            # Extract second path segment: promote/staging/1.2.3-dev.1 → staging
             DETECTED_ENV=$(echo "${HEAD_REF}" | cut -d'/' -f2)
             ENV="${DETECTED_ENV}"
-            echo "TBD-PR mode: detected env '${ENV}' from PR branch '${HEAD_REF}'"
+            echo "TBD-PR: detected env '${ENV}' from PR branch '${HEAD_REF}'"
           elif [ -n "${ENV}" ]; then
-            echo "TBD-PR mode: using explicitly provided environment '${ENV}'"
+            echo "TBD-PR: using explicitly provided environment '${ENV}'"
           else
             echo "::error::deployment-model is 'tbd-pr' but environment cannot be determined."
-            echo "::error::Either provide environment (for push events) or merge a promote/{env}/{version} PR."
             exit 1
           fi
         fi
 
-        # ── Validate that ENV is set ────────────────────────────────────────
         if [ -z "${ENV}" ]; then
           echo "::error::'environment' is required when deployment-model is 'tbd'."
           exit 1
         fi
 
-        echo "Environment:  ${ENV}"
+        echo "Environment: ${ENV}"
 
-        # Validate env is in the environments array
         if ! echo "${ENVS}" | jq -e --arg env "${ENV}" 'index($env) != null' > /dev/null; then
           echo "::error::Environment '${ENV}' is not in the environments array: ${ENVS}"
           exit 1
         fi
 
-        # The last entry in the array is always production (stable)
         PROD_ENV=$(echo "${ENVS}" | jq -r '.[-1]')
-        echo "Production environment: ${PROD_ENV}"
 
         if [ "${ENV}" == "${PROD_ENV}" ]; then
-          echo "is_prerelease=false"     >> "$GITHUB_OUTPUT"
-          echo "prerelease_identifier="  >> "$GITHUB_OUTPUT"
-          echo "Resolved: STABLE release for '${ENV}'"
+          echo "is_prerelease=false"    >> "$GITHUB_OUTPUT"
+          echo "prerelease_identifier=" >> "$GITHUB_OUTPUT"
+          echo "Stable release for '${ENV}'"
         else
           IDENTIFIER=$(echo "${IDS}" | jq -r --arg env "${ENV}" '.[$env] // "rc"')
-          echo "is_prerelease=true"                        >> "$GITHUB_OUTPUT"
-          echo "prerelease_identifier=${IDENTIFIER}"       >> "$GITHUB_OUTPUT"
-          echo "Resolved: PRERELEASE '${IDENTIFIER}' for '${ENV}'"
+          echo "is_prerelease=true"                  >> "$GITHUB_OUTPUT"
+          echo "prerelease_identifier=${IDENTIFIER}" >> "$GITHUB_OUTPUT"
+          echo "Prerelease '${IDENTIFIER}' for '${ENV}'"
         fi
 
         echo "environment=${ENV}" >> "$GITHUB_OUTPUT"
 
-    # ── 4a. python-semantic-release ─────────────────────────────────────────
     - name: Run python-semantic-release
       id: psr
-      if: inputs.versioning-tool == 'semantic-release-python'
+      if: inputs.mode == 'release' && inputs.versioning-tool == 'semantic-release-python'
       uses: python-semantic-release/python-semantic-release@v10
       with:
         github_token: ${{ steps.app-token.outputs.token || inputs.github-token }}
@@ -331,16 +427,15 @@ runs:
         commit: true
         directory: ${{ inputs.working-directory }}
 
-    # ── 4b. semantic-release (npm) ──────────────────────────────────────────
-    - name: Set up Node.js (for semantic-release-npm)
-      if: inputs.versioning-tool == 'semantic-release-npm'
+    - name: Set up Node.js (semantic-release-npm)
+      if: inputs.mode == 'release' && inputs.versioning-tool == 'semantic-release-npm'
       uses: actions/setup-node@v4
       with:
         node-version: '20'
 
     - name: Run semantic-release (npm)
       id: semrel-npm
-      if: inputs.versioning-tool == 'semantic-release-npm'
+      if: inputs.mode == 'release' && inputs.versioning-tool == 'semantic-release-npm'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -351,36 +446,28 @@ runs:
         GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
       run: |
         set -euo pipefail
-
         IS_PRERELEASE="${{ steps.detect-env.outputs.is_prerelease }}"
         IDENTIFIER="${{ steps.detect-env.outputs.prerelease_identifier }}"
-
-        # Install semantic-release if not present in node_modules
         if ! npx --no semantic-release --version &>/dev/null; then
           npm install --no-save semantic-release
         fi
-
-        # Build the command - semantic-release v24 supports --prerelease flag
         if [ "${IS_PRERELEASE}" == "true" ]; then
           npx semantic-release --prerelease "${IDENTIFIER}"
         else
           npx semantic-release
         fi
-
-        # Capture the tag that was just created
         LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
         echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
 
-    # ── 4c. GitVersion ──────────────────────────────────────────────────────
     - name: Install GitVersion
-      if: inputs.versioning-tool == 'gitversion'
+      if: inputs.mode == 'release' && inputs.versioning-tool == 'gitversion'
       uses: gittools/actions/gitversion/setup@v3
       with:
         versionSpec: ${{ inputs.gitversion-spec }}
 
     - name: Execute GitVersion
       id: gitversion
-      if: inputs.versioning-tool == 'gitversion'
+      if: inputs.mode == 'release' && inputs.versioning-tool == 'gitversion'
       uses: gittools/actions/gitversion/execute@v3
       with:
         useConfigFile: true
@@ -388,21 +475,17 @@ runs:
 
     - name: Create GitVersion release tag
       id: gitversion-tag
-      if: inputs.versioning-tool == 'gitversion'
+      if: inputs.mode == 'release' && inputs.versioning-tool == 'gitversion'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.app-token.outputs.token || inputs.github-token }}
       run: |
         set -euo pipefail
-
         IS_PRERELEASE="${{ steps.detect-env.outputs.is_prerelease }}"
         IDENTIFIER="${{ steps.detect-env.outputs.prerelease_identifier }}"
         PREFIX="${{ inputs.tag-prefix }}"
-
         if [ "${IS_PRERELEASE}" == "true" ]; then
-          # Use GitVersion's pre-release aware version
           BASE="${{ steps.gitversion.outputs.majorMinorPatch }}"
-          # Find the next prerelease number for this identifier
           LATEST=$(git tag -l "${PREFIX}${BASE}-${IDENTIFIER}.*" | sort -V | tail -1)
           if [ -z "${LATEST}" ]; then
             PRE_NUM=1
@@ -414,35 +497,25 @@ runs:
         else
           VERSION="${{ steps.gitversion.outputs.majorMinorPatch }}"
         fi
-
         TAG="${PREFIX}${VERSION}"
         echo "Creating tag: ${TAG}"
-
         git config user.name  "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git tag -a "${TAG}" -m "chore(release): ${TAG}"
-
-        # Push tag via HTTPS with token
         REMOTE_URL=$(git remote get-url origin)
         AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GITHUB_TOKEN}@|")
         git push "${AUTHED_URL}" "${TAG}"
-
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
-
-        # Create GitHub Release if requested
         if [ "${{ inputs.create-release }}" == "true" ]; then
           IS_PRE_FLAG=""
           [ "${IS_PRERELEASE}" == "true" ] && IS_PRE_FLAG="--prerelease"
-          gh release create "${TAG}" \
-            --title "${TAG}" \
-            --generate-notes \
-            ${IS_PRE_FLAG} || true
+          gh release create "${TAG}" --title "${TAG}" --generate-notes ${IS_PRE_FLAG} || true
         fi
 
     - name: Inject version into appsettings
       id: gitversion-appsettings
-      if: inputs.versioning-tool == 'gitversion' && inputs.gitversion-appsettings-file != ''
+      if: inputs.mode == 'release' && inputs.versioning-tool == 'gitversion' && inputs.gitversion-appsettings-file != ''
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.app-token.outputs.token || inputs.github-token }}
@@ -451,17 +524,14 @@ runs:
         APPSETTINGS="${{ inputs.gitversion-appsettings-file }}"
         JSON_PATH="${{ inputs.gitversion-appsettings-version-path }}"
         VERSION="${{ steps.gitversion-tag.outputs.version }}"
-
         if [ ! -f "${APPSETTINGS}" ]; then
           echo "::warning::appsettings file '${APPSETTINGS}' not found — skipping version injection"
           exit 0
         fi
-
         TMP=$(mktemp)
         jq --arg v "${VERSION}" "${JSON_PATH} = \$v" "${APPSETTINGS}" > "${TMP}"
         mv "${TMP}" "${APPSETTINGS}"
         echo "Injected version ${VERSION} into ${APPSETTINGS} at ${JSON_PATH}"
-
         git config user.name  "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git add "${APPSETTINGS}"
@@ -472,39 +542,32 @@ runs:
           git push "${AUTHED_URL}" HEAD:"${GITHUB_REF_NAME}"
         fi
 
-    # ── 4d. release-please ──────────────────────────────────────────────────
     - name: Run release-please
       id: release-please
-      if: inputs.versioning-tool == 'release-please'
+      if: inputs.mode == 'release' && inputs.versioning-tool == 'release-please'
       uses: googleapis/release-please-action@v4
       with:
         token: ${{ steps.app-token.outputs.token || inputs.github-token }}
         release-type: ${{ inputs.release-please-release-type }}
         config-file: ${{ inputs.release-please-config-file }}
 
-    # ── 5. Normalize outputs ─────────────────────────────────────────────────
-    # Collects version/tag/released from whichever tool ran and exposes
-    # a consistent set of outputs regardless of which tool was used.
     - name: Normalize outputs
       id: normalize
-      if: always()
+      if: inputs.mode == 'release'
       shell: bash
       run: |
         set -euo pipefail
-
         TOOL="${{ inputs.versioning-tool }}"
         PREFIX="${{ inputs.tag-prefix }}"
         VERSION=""
         RELEASED="false"
         TAG=""
-
         case "${TOOL}" in
           semantic-release-python)
             VERSION="${{ steps.psr.outputs.version }}"
             RELEASED="${{ steps.psr.outputs.released }}"
             TAG="${{ steps.psr.outputs.tag }}"
             ;;
-
           semantic-release-npm)
             LATEST_TAG="${{ steps.semrel-npm.outputs.latest_tag }}"
             if [ -n "${LATEST_TAG}" ]; then
@@ -513,13 +576,11 @@ runs:
               RELEASED="true"
             fi
             ;;
-
           gitversion)
             VERSION="${{ steps.gitversion-tag.outputs.version }}"
             TAG="${{ steps.gitversion-tag.outputs.tag }}"
             RELEASED="true"
             ;;
-
           release-please)
             if [ "${{ steps.release-please.outputs.release_created }}" == "true" ]; then
               TAG="${{ steps.release-please.outputs.tag_name }}"
@@ -528,8 +589,6 @@ runs:
             fi
             ;;
         esac
-
-        # Fallback: if version is empty after running the tool, read latest git tag
         if [ -z "${VERSION}" ]; then
           LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           if [ -n "${LATEST}" ]; then
@@ -537,12 +596,220 @@ runs:
             TAG="${LATEST}"
           fi
         fi
-
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
         echo "released=${RELEASED}" >> "$GITHUB_OUTPUT"
+        echo "Tool: ${TOOL} | Version: ${VERSION} | Tag: ${TAG} | Released: ${RELEASED}"
 
-        echo "Tool:     ${TOOL}"
-        echo "Version:  ${VERSION}"
-        echo "Tag:      ${TAG}"
-        echo "Released: ${RELEASED}"
+    # ═════════════════════════════════════════════════════════════════════════
+    # RELEASE MODE — Docker image promotion
+    # ═════════════════════════════════════════════════════════════════════════
+
+    - name: Set up Docker Buildx (release)
+      if: inputs.mode == 'release' && inputs.image_name != '' && steps.normalize.outputs.released == 'true'
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+    - name: Log in to GHCR (release)
+      if: inputs.mode == 'release' && inputs.image_name != '' && steps.normalize.outputs.released == 'true'
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ github.actor }}
+        password: ${{ steps.app-token.outputs.token || inputs.github-token }}
+
+    - name: Promote images
+      if: inputs.mode == 'release' && inputs.image_name != '' && steps.normalize.outputs.released == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token || inputs.github-token }}
+      run: |
+        set -euo pipefail
+
+        VERSION="${{ steps.normalize.outputs.version }}"
+        TAG="${{ steps.normalize.outputs.tag }}"
+        ENV="${{ steps.detect-env.outputs.environment }}"
+        IS_PRERELEASE="${{ steps.detect-env.outputs.is_prerelease }}"
+        DEPLOY_MODEL="${{ inputs.deployment-model }}"
+        ENVS='${{ inputs.environments }}'
+        IDS='${{ inputs.prerelease-identifiers }}'
+        PREFIX="${{ inputs.tag-prefix }}"
+
+        OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+        export IMAGE_NAME="${OWNER_LOWER}/${{ inputs.image_name }}"
+        export REGISTRY="${{ inputs.registry }}"
+        export VERSION="${VERSION}"
+        export PLATFORMS="${{ inputs.platforms }}"
+
+        # Discover all bake targets
+        BAKE_OUTPUT=$(docker buildx bake -f "${{ inputs.bake_file }}" "${{ inputs.bake_target }}" --print 2>/dev/null)
+        IMAGES=$(echo "${BAKE_OUTPUT}" | jq -c '.target | to_entries | map({target: .key, image: (.value.tags[0] // "" | split(":")[0])})')
+        echo "Images to promote: ${IMAGES}"
+
+        # Determine promotion strategy
+        IS_FIRST_ENV="false"
+        PREV_IDENTIFIER=""
+        if [ "${DEPLOY_MODEL}" == "bbd" ]; then
+          IS_FIRST_ENV="true"
+          echo "BBD: every environment uses its own pr-<N> image"
+        else
+          FIRST_ENV=$(echo "${ENVS}" | jq -r '.[0]')
+          if [ "${ENV}" == "${FIRST_ENV}" ]; then
+            IS_FIRST_ENV="true"
+            echo "TBD: first environment — will look for pr-<N>"
+          else
+            ENV_INDEX=$(echo "${ENVS}" | jq -r --arg e "${ENV}" 'index($e)')
+            PREV_ENV=$(echo "${ENVS}" | jq -r --argjson i "${ENV_INDEX}" '.[$i - 1]')
+            PREV_IDENTIFIER=$(echo "${IDS}" | jq -r --arg e "${PREV_ENV}" '.[$e] // "dev"')
+            echo "TBD: subsequent environment — will retag from ${PREV_IDENTIFIER} version"
+          fi
+        fi
+
+        # Resolve source tag suffix
+        SOURCE_TAG_SUFFIX=""
+        if [ "${IS_FIRST_ENV}" == "true" ]; then
+          # Find the PR associated with this release tag via GitHub API
+          COMMIT_SHA=$(gh api "repos/${{ github.repository }}/git/ref/tags/${TAG}" \
+            --jq 'if .object.type == "tag" then .object.sha else .object.sha end' 2>/dev/null || echo "")
+
+          if [ -n "${COMMIT_SHA}" ]; then
+            # Resolve annotated tag to commit
+            TAG_TYPE=$(gh api "repos/${{ github.repository }}/git/ref/tags/${TAG}" --jq '.object.type' 2>/dev/null || echo "commit")
+            if [ "${TAG_TYPE}" == "tag" ]; then
+              COMMIT_SHA=$(gh api "repos/${{ github.repository }}/git/tags/${COMMIT_SHA}" --jq '.object.sha' 2>/dev/null || echo "${COMMIT_SHA}")
+            fi
+
+            PR_NUMBER=""
+            CURRENT_SHA="${COMMIT_SHA}"
+            for _ in 1 2 3 4 5; do
+              PR_NUMBER=$(gh api "repos/${{ github.repository }}/commits/${CURRENT_SHA}/pulls" \
+                --jq '[.[] | select(.merged_at != null)] | .[0].number // empty' 2>/dev/null || echo "")
+              [ -n "${PR_NUMBER}" ] && break
+              # Check commit message for PR reference
+              MSG_PR=$(gh api "repos/${{ github.repository }}/commits/${CURRENT_SHA}" \
+                --jq '.commit.message' 2>/dev/null | grep -oE '\(#[0-9]+\)|Merge pull request #[0-9]+' | grep -oE '[0-9]+' | head -1 || echo "")
+              if [ -n "${MSG_PR}" ]; then
+                PR_NUMBER="${MSG_PR}"
+                break
+              fi
+              CURRENT_SHA=$(gh api "repos/${{ github.repository }}/commits/${CURRENT_SHA}" \
+                --jq '.parents[0].sha // empty' 2>/dev/null || echo "")
+              [ -z "${CURRENT_SHA}" ] && break
+            done
+
+            if [ -n "${PR_NUMBER}" ]; then
+              SOURCE_TAG_SUFFIX="pr-${PR_NUMBER}"
+              echo "Source: pr-${PR_NUMBER}"
+            else
+              echo "::warning::Could not find PR for tag ${TAG} — will fall back to fresh build"
+            fi
+          fi
+        else
+          # Find latest tag with the previous environment's identifier
+          BASE_VERSION=$(echo "${VERSION}" | sed 's/-[a-zA-Z][^.]*\.[0-9]*$//')
+          SEARCH_PREFIX="${PREFIX}${BASE_VERSION}-${PREV_IDENTIFIER}."
+          SOURCE_TAG_SUFFIX=$(gh api "repos/${{ github.repository }}/git/matching-refs/tags/${SEARCH_PREFIX}" \
+            --jq '[.[].ref | ltrimstr("refs/tags/")] | sort_by(ltrimstr("'"${PREFIX}${BASE_VERSION}-${PREV_IDENTIFIER}."'") | tonumber) | last // empty' \
+            2>/dev/null || echo "")
+          if [ -n "${SOURCE_TAG_SUFFIX}" ]; then
+            echo "Source tag: ${SOURCE_TAG_SUFFIX}"
+          else
+            echo "::warning::No tag found matching ${SEARCH_PREFIX}* — will fall back to fresh build"
+          fi
+        fi
+
+        # Promote each image
+        echo "${IMAGES}" | jq -c '.[]' | while IFS= read -r item; do
+          TARGET=$(echo "${item}" | jq -r '.target')
+          IMAGE=$(echo "${item}" | jq -r '.image')
+          NEW_TAG="${IMAGE}:${TAG}"
+
+          PROMOTED="false"
+          if [ -n "${SOURCE_TAG_SUFFIX}" ]; then
+            SOURCE="${IMAGE}:${SOURCE_TAG_SUFFIX}"
+            SOURCE_DIGEST=$(docker buildx imagetools inspect "${SOURCE}" \
+              --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"' || echo "")
+
+            if [ -n "${SOURCE_DIGEST}" ]; then
+              if [ "${IS_PRERELEASE}" == "false" ]; then
+                docker buildx imagetools create --tag "${NEW_TAG}" --tag "${IMAGE}:latest" "${SOURCE}"
+                echo "Promoted ${SOURCE} → ${NEW_TAG} + :latest"
+              else
+                docker buildx imagetools create --tag "${NEW_TAG}" "${SOURCE}"
+                echo "Promoted ${SOURCE} → ${NEW_TAG}"
+              fi
+              PROMOTED="true"
+            else
+              echo "Source not found: ${SOURCE}"
+            fi
+          fi
+
+          if [ "${PROMOTED}" == "false" ]; then
+            echo "Fresh build fallback for ${IMAGE} (${TARGET})"
+            EXTRA_TAGS=""
+            [ "${IS_PRERELEASE}" == "false" ] && EXTRA_TAGS="--set ${TARGET}.tags=${IMAGE}:latest"
+            docker buildx bake \
+              -f "${{ inputs.bake_file }}" "${TARGET}" \
+              --set "${TARGET}.tags=${NEW_TAG}" \
+              ${EXTRA_TAGS} \
+              --set "${TARGET}.cache-from=type=gha,scope=buildkit-${TARGET}" \
+              --set "${TARGET}.cache-to=type=gha,mode=max,scope=buildkit-${TARGET}" \
+              --push
+          fi
+        done
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # RELEASE MODE — Promotion PR (tbd-pr model, opt-in)
+    # ═════════════════════════════════════════════════════════════════════════
+
+    - name: Create promotion PR
+      if: |
+        inputs.mode == 'release' &&
+        inputs.create-promotion-pr == 'true' &&
+        inputs.deployment-model == 'tbd-pr' &&
+        steps.normalize.outputs.released == 'true' &&
+        steps.detect-env.outputs.is_prerelease == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token || inputs.github-token }}
+      run: |
+        set -euo pipefail
+
+        VERSION="${{ steps.normalize.outputs.version }}"
+        TAG="${{ steps.normalize.outputs.tag }}"
+        ENV="${{ steps.detect-env.outputs.environment }}"
+        ENVS='${{ inputs.environments }}'
+        PREFIX="${{ inputs.promote-branch-prefix }}"
+        TARGET="${{ inputs.promote-target-branch }}"
+
+        LAST_ENV=$(echo "${ENVS}" | jq -r '.[-1]')
+        if [ "${ENV}" == "${LAST_ENV}" ]; then
+          echo "Already at last environment — no promotion PR needed"
+          exit 0
+        fi
+
+        ENV_INDEX=$(echo "${ENVS}" | jq -r --arg e "${ENV}" 'index($e)')
+        NEXT_ENV=$(echo "${ENVS}" | jq -r --argjson i "${ENV_INDEX}" '.[$i + 1]')
+        BRANCH="${PREFIX}/${NEXT_ENV}/${VERSION}"
+
+        echo "Creating promotion PR: ${BRANCH} → ${TARGET}"
+
+        git config user.name  "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git checkout -b "${BRANCH}"
+
+        mkdir -p .github/promotions
+        printf 'Promote %s to %s.\n' "${TAG}" "${NEXT_ENV}" > ".github/promotions/${VERSION}-to-${NEXT_ENV}.md"
+
+        git add ".github/promotions/${VERSION}-to-${NEXT_ENV}.md"
+        git commit -m "chore(release): promote ${TAG} to ${NEXT_ENV} [skip ci]"
+
+        REMOTE_URL=$(git remote get-url origin)
+        AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GH_TOKEN}@|")
+        git push "${AUTHED_URL}" "${BRANCH}"
+
+        gh pr create \
+          --title "chore(release): promote ${TAG} to ${NEXT_ENV}" \
+          --body "Merging this PR will trigger the **${NEXT_ENV}** release for \`${TAG}\`." \
+          --base "${TARGET}" \
+          --head "${BRANCH}" \
+          --label "promotion" || echo "::warning::PR already exists for ${BRANCH}"

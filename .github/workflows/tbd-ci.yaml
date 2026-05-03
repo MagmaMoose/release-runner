@@ -1,217 +1,70 @@
 name: TBD CI — Build and Push PR Image
 
-# Reusable workflow: validates TBD branch naming, then builds and pushes
-# container image(s) tagged pr-<number> to GHCR using Docker Bake.
+# Thin wrapper around calebsargeant/semantic-release@v1 (mode: ci).
+# Prefer using the action directly for full control:
 #
-# A single bake_target (or group) builds ALL images in one job.
-# Image names and tags are defined in your docker-bake.hcl using these env vars:
-#   VERSION   = pr-<PR number>
-#   REGISTRY  = ghcr.io (or override via registry input)
-#   IMAGE_NAME = <owner>/<image_name>   (e.g., my-org/my-app)
-#   PLATFORMS  = comma-separated platform list
-#
-# Example bake file for multi-image:
-#   target "api"    { tags = ["${REGISTRY}/${IMAGE_NAME}-api:${VERSION}"] }
-#   target "worker" { tags = ["${REGISTRY}/${IMAGE_NAME}-worker:${VERSION}"] }
-#   group "default" { targets = ["api", "worker"] }
-#
-# Why one job and not one job per image?
-#   Docker Bake builds all targets in parallel in a single BuildKit session,
-#   sharing layer caches across targets. Per-target GHA cache scopes are set
-#   dynamically so each target has its own isolated build cache.
+#   jobs:
+#     build:
+#       runs-on: ubuntu-latest
+#       permissions:
+#         contents: read
+#         packages: write
+#         pull-requests: read
+#       steps:
+#         - uses: calebsargeant/semantic-release@v1
+#           with:
+#             mode: ci
+#             image_name: my-app
+#             github-token: ${{ secrets.GITHUB_TOKEN }}
 
 on:
   workflow_call:
     inputs:
       image_name:
-        description: 'Base image name without registry/owner (e.g., my-app). Sets IMAGE_NAME=<owner>/<image_name> for the bake file.'
+        description: 'Base image name without registry/owner (e.g., my-app)'
         required: true
         type: string
       bake_file:
-        description: 'Path to docker-bake.hcl'
         required: false
         type: string
         default: 'docker-bake.hcl'
       bake_target:
-        description: 'Bake target or group to build. A group builds all its sub-targets in one job.'
         required: false
         type: string
         default: 'default'
       platforms:
-        description: 'Target platforms (comma-separated)'
         required: false
         type: string
         default: 'linux/amd64'
       registry:
-        description: 'Container registry'
         required: false
         type: string
         default: 'ghcr.io'
       runner:
-        description: 'GitHub Actions runner'
         required: false
         type: string
         default: 'ubuntu-latest'
       enforce_branch_naming:
-        description: |
-          Enforce TBD branch naming convention.
-          Allowed prefixes: feat, fix, chore, hotfix, docs, refactor, perf, test, ci, style.
         required: false
         type: boolean
         default: true
-      container_paths:
-        description: |
-          Multiline glob patterns (one per line) that trigger a container build.
-          Leave empty to build on every PR regardless of which files changed.
-        required: false
-        type: string
-        default: ''
-    outputs:
-      version:
-        description: 'Image tag built (pr-<number>). Empty if build was skipped.'
-        value: ${{ jobs.build.outputs.version }}
-      build_skipped:
-        description: '"true" when no container-related files changed (only when container_paths is set).'
-        value: ${{ jobs.build.outputs.build_skipped }}
 
 jobs:
-  validate-branch:
-    name: Validate Branch Name
-    if: inputs.enforce_branch_naming && github.event_name == 'pull_request'
-    runs-on: ${{ inputs.runner }}
-    steps:
-      - name: Check TBD branch naming convention
-        run: |
-          BRANCH="${{ github.head_ref }}"
-          echo "Branch: ${BRANCH}"
-          ALLOWED='^(feat|fix|chore|hotfix|docs|refactor|perf|test|ci|style)/'
-          if echo "${BRANCH}" | grep -qE "${ALLOWED}"; then
-            echo "Branch '${BRANCH}' follows TBD naming convention."
-          else
-            echo "::error::Branch '${BRANCH}' does not follow the TBD naming convention."
-            echo "::error::Required format: <type>/<short-description>"
-            echo "::error::Allowed types: feat, fix, chore, hotfix, docs, refactor, perf, test, ci, style"
-            exit 1
-          fi
-
   build:
-    name: Build Images (${{ inputs.bake_target }})
-    needs: validate-branch
-    if: always() && (needs.validate-branch.result == 'success' || needs.validate-branch.result == 'skipped')
+    name: Build (${{ inputs.bake_target }})
     runs-on: ${{ inputs.runner }}
-    concurrency:
-      group: tbd-ci-${{ github.ref }}
-      cancel-in-progress: true
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      build_skipped: ${{ steps.filter.outputs.build_skipped }}
     permissions:
       contents: read
       packages: write
       pull-requests: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Check for container-related changes
-        id: filter
-        run: |
-          # When container_paths is empty, always build
-          if [ -z '${{ inputs.container_paths }}' ]; then
-            echo "build_skipped=false" >> "$GITHUB_OUTPUT"
-            echo "container=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Use git diff to check if any container-related files changed
-          BASE="${{ github.event.pull_request.base.sha }}"
-          HEAD="${{ github.sha }}"
-          CHANGED=$(git diff --name-only "${BASE}" "${HEAD}" 2>/dev/null || git diff --name-only HEAD~1 HEAD)
-
-          SHOULD_BUILD=false
-          while IFS= read -r pattern || [[ -n "$pattern" ]]; do
-            pattern=$(echo "${pattern}" | xargs)
-            [[ -z "$pattern" ]] && continue
-            if echo "${CHANGED}" | grep -qE "${pattern}"; then
-              SHOULD_BUILD=true
-              break
-            fi
-          done <<< '${{ inputs.container_paths }}'
-
-          if [ "${SHOULD_BUILD}" == "true" ]; then
-            echo "build_skipped=false" >> "$GITHUB_OUTPUT"
-            echo "container=true" >> "$GITHUB_OUTPUT"
-            echo "Container-related files changed — build will proceed"
-          else
-            echo "build_skipped=true" >> "$GITHUB_OUTPUT"
-            echo "container=false" >> "$GITHUB_OUTPUT"
-            echo "No container-related files changed — skipping build"
-          fi
-
-      - name: Set version
-        id: version
-        if: steps.filter.outputs.container == 'true'
-        run: |
-          VERSION="pr-${{ github.event.pull_request.number }}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Building version: ${VERSION}"
-
-      - name: Set up QEMU
-        if: steps.filter.outputs.container == 'true'
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-
-      - name: Set up Docker Buildx
-        if: steps.filter.outputs.container == 'true'
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
-      - name: Log in to GHCR
-        if: steps.filter.outputs.container == 'true'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      - uses: calebsargeant/semantic-release@main
         with:
-          registry: ${{ inputs.registry }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Resolve bake targets and build
-        if: steps.filter.outputs.container == 'true'
-        run: |
-          set -euo pipefail
-
-          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          IMAGE_NAME="${OWNER_LOWER}/${{ inputs.image_name }}"
-          VERSION="${{ steps.version.outputs.version }}"
-          BAKE_FILE="${{ inputs.bake_file }}"
-          BAKE_TARGET="${{ inputs.bake_target }}"
-
-          echo "IMAGE_NAME: ${IMAGE_NAME}"
-          echo "VERSION:    ${VERSION}"
-          echo "BAKE_FILE:  ${BAKE_FILE}"
-          echo "BAKE_TARGET: ${BAKE_TARGET}"
-
-          # Discover sub-targets for per-target cache scopes
-          TARGETS=$(docker buildx bake \
-            -f "${BAKE_FILE}" "${BAKE_TARGET}" \
-            --print 2>/dev/null | jq -r '.target | keys[]')
-          echo "Targets: ${TARGETS}"
-
-          # Build per-target cache set args
-          CACHE_ARGS=()
-          for TARGET in ${TARGETS}; do
-            SCOPE="bk-${TARGET}-${{ github.ref_name }}"
-            CACHE_ARGS+=(
-              --set "${TARGET}.cache-from=type=gha,scope=${SCOPE}"
-              --set "${TARGET}.cache-to=type=gha,mode=max,scope=${SCOPE}"
-            )
-          done
-
-          docker buildx bake \
-            -f "${BAKE_FILE}" \
-            "${BAKE_TARGET}" \
-            "${CACHE_ARGS[@]}" \
-            --push
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          REGISTRY: ${{ inputs.registry }}
-          IMAGE_NAME: >-
-            ${{ format('{0}/{1}', github.repository_owner, inputs.image_name) }}
-          PLATFORMS: ${{ inputs.platforms }}
+          mode: ci
+          image_name:              ${{ inputs.image_name }}
+          bake_file:               ${{ inputs.bake_file }}
+          bake_target:             ${{ inputs.bake_target }}
+          platforms:               ${{ inputs.platforms }}
+          registry:                ${{ inputs.registry }}
+          enforce_branch_naming:   ${{ inputs.enforce_branch_naming }}
+          github-token:            ${{ secrets.GITHUB_TOKEN }}

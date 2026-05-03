@@ -14,22 +14,19 @@ jobs:
         github.event.pull_request.merged == true &&
         startsWith(github.head_ref, 'promote/')
       )
-    uses: calebsargeant/semantic-release/.github/workflows/tbd-release.yaml@v1
-    with:
-      deployment-model: tbd-pr
-      environment: ${{ github.event_name == 'push' && 'dev' || '' }}
-      environments: '["dev", "staging", "prod"]'
-      prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-      image_name: my-app
-    secrets: inherit
-
-  create-promotion-pr:
-    needs: release
-    if: needs.release.outputs.released == 'true' && needs.release.outputs.is-prerelease == 'true'
-    uses: calebsargeant/semantic-release/.github/workflows/tbd-promote.yaml@v1
-    with:
-      version: ${{ needs.release.outputs.version }}
-      tag: ${{ needs.release.outputs.tag }}
-      current-environment: ${{ needs.release.outputs.resolved-environment }}
-      environments: '["dev", "staging", "prod"]'
-    secrets: inherit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      pull-requests: write
+    steps:
+      - uses: calebsargeant/semantic-release@v1
+        with:
+          mode: release
+          deployment-model: tbd-pr
+          environment: ${{ github.event_name == 'push' && 'dev' || '' }}
+          environments: '["dev", "staging", "prod"]'
+          prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
+          image_name: my-app
+          create-promotion-pr: 'true'
+          github-token: ${{ secrets.GITHUB_TOKEN }}

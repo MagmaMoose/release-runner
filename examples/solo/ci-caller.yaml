@@ -8,8 +8,14 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
-    uses: calebsargeant/semantic-release/.github/workflows/tbd-ci.yaml@v1
-    with:
-      image_name: my-app
-      enforce_branch_naming: true
-    secrets: inherit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: read
+    steps:
+      - uses: calebsargeant/semantic-release@v1
+        with:
+          mode: ci
+          image_name: my-app
+          github-token: ${{ secrets.GITHUB_TOKEN }}
