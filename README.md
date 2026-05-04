@@ -6,7 +6,7 @@ For setup guides, environment patterns, authentication choices, and anything bey
 
 ## What The Action Does
 
-Release Runner is a composite GitHub Action for repositories that want one release step to:
+Release Runner is a [composite GitHub Action](https://docs.github.com/en/actions/tutorials/create-actions/create-a-composite-action) for repositories that want one release step to:
 
 - run semantic versioning
 - create git tags and GitHub Releases
@@ -58,7 +58,7 @@ jobs:
           prerelease-identifiers: '{}'
 ```
 
-By default, release jobs use the Release Runner GitHub App. Install the app on the organization or repository, then grant the release job `id-token: write`.
+By default, release jobs use the Release Runner GitHub App. [Install the app](https://github.com/apps/release-runner/installations/new) on the organization or repository, then grant the release job `id-token: write`.
 
 If you prefer to use the workflow token instead:
 
