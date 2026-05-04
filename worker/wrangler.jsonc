@@ -1,11 +1,13 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "semantic-release-token-broker",
+  "name": "release-runner",
   "main": "src/index.ts",
   "compatibility_date": "2026-05-03",
   "compatibility_flags": [
     "nodejs_compat_v2"
   ],
+  "workers_dev": true,
+  "preview_urls": true,
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1

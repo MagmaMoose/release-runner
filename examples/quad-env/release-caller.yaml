@@ -16,9 +16,9 @@ jobs:
       )
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       packages: write
-      pull-requests: write
+      id-token: write
     steps:
       - uses: calebsargeant/semantic-release@v1
         with:
@@ -29,4 +29,3 @@ jobs:
           prerelease-identifiers: '{"dev": "dev", "tst": "alpha", "acc": "beta"}'
           image_name: my-app
           create-promotion-pr: 'true'
-          github-token: ${{ secrets.GITHUB_TOKEN }}

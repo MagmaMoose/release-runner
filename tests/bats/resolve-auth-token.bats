@@ -21,6 +21,14 @@ setup() {
   [[ "$output" == *"auth-mode public-app requires"* ]]
 }
 
+@test "public app falls back to workflow token for ci mode" {
+  run env ACTION_MODE=ci AUTH_MODE=public-app DEFAULT_GITHUB_TOKEN=gh bash scripts/resolve-auth-token.sh
+
+  [ "$status" -eq 0 ]
+  grep -q "token=gh" "${GITHUB_OUTPUT}"
+  grep -q "source=github-token" "${GITHUB_OUTPUT}"
+}
+
 @test "github-token mode uses default workflow token" {
   run env AUTH_MODE=github-token DEFAULT_GITHUB_TOKEN=gh bash scripts/resolve-auth-token.sh
 
