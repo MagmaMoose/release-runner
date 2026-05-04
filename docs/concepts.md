@@ -1,0 +1,148 @@
+# Concepts
+
+This page explains the ideas behind Release Runner. Use the README when you
+only need a workflow snippet.
+
+## What Release Runner Does
+
+Release Runner is a composite GitHub Action that runs inside your workflow. In
+release mode it:
+
+1. gets a token that can write release artifacts
+2. checks out the repository with full history and tags
+3. resolves the target environment
+4. runs one selected versioning tool
+5. exposes normalized outputs such as `version`, `tag`, and `released`
+6. promotes or rebuilds Docker images when `image_name` is set
+7. optionally opens the next promotion PR for trunk-based promotion flows
+
+In CI mode it only builds pull request Docker images tagged as `pr-<number>`.
+
+## Version Creation
+
+Release Runner does not decide version numbers by parsing commits itself. It
+delegates that work to the selected versioning tool.
+
+| Tool | How versions are decided |
+|---|---|
+| `semantic-release-python` | python-semantic-release reads commits and `pyproject.toml` |
+| `semantic-release-npm` | semantic-release reads commits and its release config |
+| `release-please` | release-please reads commits and its release config |
+| `gitversion` | GitVersion reads branch history and `GitVersion.yml` |
+
+The bundled semantic-release and release-please examples use
+[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
+
+| Commit | Release result |
+|---|---|
+| `fix: handle empty response` | Patch, for example `1.0.1` |
+| `feat: add export endpoint` | Minor, for example `1.1.0` |
+| `feat!: change API shape` | Major, for example `2.0.0` |
+| Commit body with `BREAKING CHANGE:` | Major, for example `2.0.0` |
+
+If you use GitVersion, the branch rules in `GitVersion.yml` control the version
+increment.
+
+## Release Models
+
+Release Runner supports two release models.
+
+### Trunk-Based Development
+
+Trunk-Based Development, or TBD, means one branch creates release tags. That
+branch is usually `main`.
+
+The same branch can create tags for multiple environments. The selected
+environment decides whether the version is a prerelease or stable.
+
+Example with three environments:
+
+| Environment | Tag example | Meaning |
+|---|---|---|
+| `dev` | `v1.2.3-dev.1` | prerelease |
+| `staging` | `v1.2.3-rc.1` | prerelease candidate |
+| `prod` | `v1.2.3` | stable release |
+
+There are two TBD variants:
+
+- explicit environment: pass `deployment-model: tbd` and `environment`
+- promotion PRs: pass `deployment-model: tbd-pr` and let merged
+  `promote/...` branches select the next environment
+
+`tbd-pr` is not a separate release model. It is the action input used for the
+promotion-PR variant of TBD.
+
+### Branch-Based Development
+
+Branch-Based Development, or BBD, means long-lived branches represent
+environments. The action uses `branch-map` to select the environment.
+
+Example:
+
+| Branch | Environment | Tag example |
+|---|---|---|
+| `dev` | `dev` | `v1.2.3-dev.1` |
+| `staging` | `staging` | `v1.2.3-rc.1` |
+| `main` | `prod` | `v1.2.3` |
+
+Use BBD when your repository already promotes work by merging between
+environment branches.
+
+## Environment Order
+
+The `environments` input is ordered. The last environment is stable. Every
+earlier environment is a prerelease and must have an entry in
+`prerelease-identifiers`.
+
+```yaml
+environments: '["dev", "staging", "prod"]'
+prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
+```
+
+This means:
+
+- `dev` creates tags like `v1.2.3-dev.1`
+- `staging` creates tags like `v1.2.3-rc.1`
+- `prod` creates tags like `v1.2.3`
+
+For production-only repositories:
+
+```yaml
+environment: prod
+environments: '["prod"]'
+prerelease-identifiers: '{}'
+```
+
+## Docker Promotion
+
+Docker support is enabled by setting `image_name`.
+
+In CI mode, Release Runner builds your Docker Bake target or group and pushes
+images tagged as `pr-<number>`.
+
+In release mode, the semantic version becomes the image tag. For example:
+
+```text
+ghcr.io/my-org/my-app:v1.2.3
+```
+
+Release mode tries to retag an existing image before rebuilding:
+
+| Flow | Source image |
+|---|---|
+| First TBD environment | the merged pull request image, such as `pr-42` |
+| Later TBD environments | the previous environment's release image |
+| BBD | the pull request image associated with the branch release |
+
+If the source image cannot be found, the action runs a fresh Docker Bake build
+and pushes the release tag. Stable releases also get `latest`.
+
+## Release Write Token
+
+Release mode needs a token because it may write Git tags, GitHub Releases,
+release commits, promotion PR branches, and GHCR images.
+
+Most repositories should use the default `auth-mode: public-app`, which uses
+the Release Runner GitHub App. Use `auth-mode: github-token` only when
+`GITHUB_TOKEN` is allowed to perform the required writes. Use
+`auth-mode: private-app` when your organization owns the GitHub App.

@@ -1,67 +1,84 @@
 # Choose Your Setup
 
-Release Runner is configured by combining four choices:
+This page maps common release flows to action inputs. Read
+[Concepts](concepts.md) first if TBD, BBD, or Docker promotion are new to you.
 
-1. authentication
-2. versioning tool
-3. environment model
-4. Docker behavior
+## 1. Choose A Release Model
 
-This page shows the supported combinations and the action inputs each one needs.
+### Trunk-Based Development
 
-## Authentication Choice
+Use Trunk-Based Development when one branch, usually `main`, creates release
+tags.
 
-### Release Runner GitHub App
-
-Use this unless your organization has a reason to own its own GitHub App.
-
-Repository requirements:
-
-- Release Runner GitHub App installed on the organization or repository
-- `id-token: write` on release jobs
-- branch protection or rulesets allowing the app to perform release writes
-
-Action inputs:
+Production-only:
 
 ```yaml
 with:
   mode: release
-  auth-mode: public-app
+  environment: prod
+  environments: '["prod"]'
+  prerelease-identifiers: '{}'
 ```
 
-`auth-mode: public-app` is the default, so you can omit it.
-
-### Private GitHub App
-
-Use this when your organization owns the app.
+Explicit prerelease environment:
 
 ```yaml
 with:
   mode: release
-  auth-mode: private-app
-  app-id: ${{ secrets.SEMANTIC_RELEASE_APP_ID }}
-  app-private-key: ${{ secrets.SEMANTIC_RELEASE_APP_PRIVATE_KEY }}
+  deployment-model: tbd
+  environment: dev
+  environments: '["dev", "staging", "prod"]'
+  prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
 ```
 
-### Workflow Token
-
-Use this when `GITHUB_TOKEN` is allowed to write tags, releases, release commits, and promotion PR branches.
+Promotion PRs from one branch:
 
 ```yaml
-permissions:
-  contents: write
-  pull-requests: write
-  packages: write
-
-steps:
-  - uses: calebsargeant/semantic-release@v1
-    with:
-      mode: release
-      auth-mode: github-token
-      github-token: ${{ secrets.GITHUB_TOKEN }}
+with:
+  mode: release
+  deployment-model: tbd-pr
+  environment: ${{ github.event_name == 'push' && 'dev' || '' }}
+  environments: '["dev", "staging", "prod"]'
+  prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
+  create-promotion-pr: 'true'
 ```
 
-## Versioning Tool Choice
+Promotion flow:
+
+| Trigger | Environment | Tag |
+|---|---|---|
+| Push to `main` | `dev` | `v1.2.3-dev.1` |
+| Merge `promote/staging/...` | `staging` | `v1.2.3-rc.1` |
+| Merge `promote/prod/...` | `prod` | `v1.2.3` |
+
+`tbd-pr` is the action input for the promotion-PR variant of TBD. It is not a
+third release model.
+
+### Branch-Based Development
+
+Use Branch-Based Development when long-lived branches represent environments.
+
+```yaml
+with:
+  mode: release
+  deployment-model: bbd
+  branch-map: '{"dev": "dev", "staging": "staging", "main": "prod"}'
+  environments: '["dev", "staging", "prod"]'
+  prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
+```
+
+Branch mapping:
+
+| Branch | Environment | Tag |
+|---|---|---|
+| `dev` | `dev` | `v1.2.3-dev.1` |
+| `staging` | `staging` | `v1.2.3-rc.1` |
+| `main` | `prod` | `v1.2.3` |
+
+For BBD pull request CI, set `enforce_branch_naming: 'false'` because the
+target branches are environment names.
+
+## 2. Choose A Versioning Tool
 
 | Tool | Input | Config file |
 |---|---|---|
@@ -86,91 +103,10 @@ with:
   working-directory: services/api
 ```
 
-## Environment Model Choice
+The semantic-release and release-please example configs use Conventional
+Commits. GitVersion uses the rules in `GitVersion.yml`.
 
-### Single Production Environment
-
-Use this for libraries, CLIs, services, or images that release directly from `main`.
-
-```yaml
-with:
-  mode: release
-  environment: prod
-  environments: '["prod"]'
-  prerelease-identifiers: '{}'
-```
-
-Version example:
-
-| Environment | Tag |
-|---|---|
-| `prod` | `v1.2.3` |
-
-### TBD With Explicit Environment
-
-Use this when one trunk branch releases to a specific environment and another workflow handles later promotion.
-
-```yaml
-with:
-  mode: release
-  deployment-model: tbd
-  environment: dev
-  environments: '["dev", "staging", "prod"]'
-  prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-```
-
-Version examples:
-
-| Environment | Tag |
-|---|---|
-| `dev` | `v1.2.3-dev.1` |
-| `staging` | `v1.2.3-rc.1` |
-| `prod` | `v1.2.3` |
-
-### TBD With Promotion PRs
-
-Use this when one trunk branch should promote through environments by reviewed PRs.
-
-```yaml
-with:
-  mode: release
-  deployment-model: tbd-pr
-  environment: ${{ github.event_name == 'push' && 'dev' || '' }}
-  environments: '["dev", "staging", "prod"]'
-  prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-  create-promotion-pr: 'true'
-```
-
-Release flow:
-
-| Trigger | Environment | Tag |
-|---|---|---|
-| Push to `main` | `dev` | `v1.2.3-dev.1` |
-| Merge `promote/staging/...` | `staging` | `v1.2.3-rc.1` |
-| Merge `promote/prod/...` | `prod` | `v1.2.3` |
-
-### BBD Branch Mapping
-
-Use this when each environment has its own long-lived branch.
-
-```yaml
-with:
-  mode: release
-  deployment-model: bbd
-  branch-map: '{"dev": "dev", "staging": "staging", "main": "prod"}'
-  environments: '["dev", "staging", "prod"]'
-  prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-```
-
-Branch mapping:
-
-| Branch | Environment | Tag |
-|---|---|---|
-| `dev` | `dev` | `v1.2.3-dev.1` |
-| `staging` | `staging` | `v1.2.3-rc.1` |
-| `main` | `prod` | `v1.2.3` |
-
-## Docker Choice
+## 3. Choose Docker Behavior
 
 ### Version Only
 
@@ -195,7 +131,7 @@ with:
   github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-Add release promotion:
+Add release image promotion:
 
 ```yaml
 with:
@@ -203,11 +139,13 @@ with:
   image_name: my-app
 ```
 
-The Bake target should emit one image tag based on `REGISTRY`, `IMAGE_NAME`, and `VERSION`.
+The Bake target should emit one image tag based on `REGISTRY`, `IMAGE_NAME`,
+and `VERSION`.
 
 ### Multiple Images
 
-Set `bake_target` to a Bake group. Each target in the group must have its own tag.
+Set `bake_target` to a Bake group. Each target in the group must have its own
+tag.
 
 ```yaml
 with:
@@ -219,12 +157,51 @@ with:
 
 Release Runner expands the group and builds or promotes every target.
 
-## Complete Combination Examples
+## 4. Choose A Release Write Token
 
-| Combination | Required inputs |
+Release mode needs a token that can perform the writes required by your setup.
+
+| Choice | Inputs | Use when |
+|---|---|---|
+| Release Runner GitHub App | default `auth-mode: public-app` | You use the hosted app |
+| Private GitHub App | `auth-mode: private-app`, `app-id`, `app-private-key` | Your organization owns the app |
+| Workflow token | `auth-mode: github-token`, `github-token` | `GITHUB_TOKEN` can write release artifacts |
+
+Release Runner GitHub App example:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+
+steps:
+  - uses: calebsargeant/semantic-release@v1
+    with:
+      mode: release
+```
+
+Workflow token example:
+
+```yaml
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+steps:
+  - uses: calebsargeant/semantic-release@v1
+    with:
+      mode: release
+      auth-mode: github-token
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+## Common Combinations
+
+| Goal | Required inputs |
 |---|---|
 | Production-only, version-only | `environment`, `environments`, `prerelease-identifiers` |
 | Production-only with Docker | production-only inputs plus `image_name` and PR CI |
-| TBD promotion PRs, version-only | `deployment-model: tbd-pr`, environment model inputs, `create-promotion-pr` |
+| TBD promotion PRs, version-only | `deployment-model: tbd-pr`, environment inputs, `create-promotion-pr` |
 | TBD promotion PRs with Docker | TBD promotion PR inputs plus `image_name` and PR CI |
-| BBD with Docker | `deployment-model: bbd`, `branch-map`, environment model inputs, `image_name`, BBD PR CI |
+| BBD with Docker | `deployment-model: bbd`, `branch-map`, environment inputs, `image_name`, BBD PR CI |

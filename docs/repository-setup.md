@@ -1,6 +1,7 @@
 # Repository Setup
 
 Use this checklist after the organization-level app and ruleset setup is done.
+If the release models are new to you, read [Concepts](concepts.md) first.
 
 ## 1. Add A Versioning Config
 
@@ -130,9 +131,12 @@ jobs:
 
 Add `packages: write` and `image_name` when Docker promotion is enabled.
 
-### TBD Promotion PRs
+### Trunk-Based Promotion PRs
 
-Use this when a merge to `main` releases to the first environment and the action opens promotion PRs for the next environments.
+Use this when a merge to `main` releases to the first environment and the
+action opens promotion PRs for the next environments. This is still a
+Trunk-Based Development flow; `deployment-model: tbd-pr` enables promotion PR
+detection.
 
 ```yaml
 name: Release
@@ -173,7 +177,7 @@ jobs:
 
 Remove `packages: write` and `image_name` for a version-only flow.
 
-### BBD Branch Mapping
+### Branch-Based Development
 
 Use this when each environment has its own long-lived branch.
 
@@ -205,9 +209,10 @@ jobs:
 
 Remove `packages: write` and `image_name` for a version-only flow.
 
-## 5. Use Outputs In Deployment Jobs
+## 5. Use Outputs In Later Jobs
 
-Release Runner stops at release orchestration. Deployment jobs should consume its outputs.
+Later jobs can consume Release Runner outputs such as `tag`, `version`, and
+`released`.
 
 ```yaml
 jobs:
@@ -229,12 +234,12 @@ jobs:
           environments: '["prod"]'
           prerelease-identifiers: '{}'
 
-  deploy:
+  next:
     needs: release
     if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Deploy ${{ needs.release.outputs.tag }}"
+      - run: echo "Released ${{ needs.release.outputs.tag }}"
 ```
 
 ## 6. Validate The First Run
@@ -242,7 +247,7 @@ jobs:
 Before relying on the workflow:
 
 1. Open a PR and confirm Docker CI publishes `pr-<number>` when Docker is enabled.
-2. Merge a Conventional Commit and confirm a tag is created.
+2. Merge a commit that your selected versioning tool should release.
 3. Confirm the selected versioning tool updates only expected files.
 4. Confirm a promotion PR is created when using `tbd-pr`.
-5. Confirm downstream deployment jobs read `tag`, `version`, and `released` correctly.
+5. Confirm later jobs read `tag`, `version`, and `released` correctly.

@@ -8,7 +8,7 @@ Most repositories should use the default `auth-mode: public-app`.
 
 For users, this means:
 
-1. Install the Release Runner GitHub App on the organization or selected repository.
+1. Install the [Release Runner GitHub App](https://github.com/apps/release-runner/installations/new) on the organization or selected repository.
 2. Allow the app through branch protection or repository rulesets if releases write protected refs.
 3. Grant release jobs `id-token: write`.
 4. Keep the default auth inputs.
