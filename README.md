@@ -129,3 +129,11 @@ and `staging`, then stable tags for `prod`.
 
 For the complete input/output reference, see the
 [action reference](https://semver.calebsargeant.com/reference/action-inputs-outputs/).
+
+## Sponsor
+
+If Release Runner saves you time or helps your team ship more reliably,
+consider sponsoring the project.
+
+[❤️ Sponsor on GitHub](https://github.com/sponsors/CalebSargeant)
+
