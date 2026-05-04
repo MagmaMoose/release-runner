@@ -4,7 +4,6 @@
   <img src="docs/release-runner-logo.png" alt="Release Runner" width="200">
 </p>
 
-
 [![CI](https://github.com/calebsargeant/semantic-release/actions/workflows/ci.yaml/badge.svg)](https://github.com/calebsargeant/semantic-release/actions/workflows/ci.yaml)
 [![Release](https://github.com/calebsargeant/semantic-release/actions/workflows/release.yaml/badge.svg)](https://github.com/calebsargeant/semantic-release/actions/workflows/release.yaml)
 [![Docs](https://github.com/calebsargeant/semantic-release/actions/workflows/docs-pages.yaml/badge.svg)](https://semver.calebsargeant.com)
