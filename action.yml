@@ -282,7 +282,7 @@ runs:
           inputs.app-id != '' &&
           inputs.app-private-key != ''
         )
-      uses: actions/create-github-app-token@v1
+      uses: actions/create-github-app-token@v3
       with:
         app-id: ${{ inputs.app-id }}
         private-key: ${{ inputs.app-private-key }}
@@ -309,7 +309,7 @@ runs:
 
     # ── 2. Checkout ─────────────────────────────────────────────────────────
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
         fetch-tags: true
@@ -326,15 +326,15 @@ runs:
 
     - name: Set up QEMU
       if: inputs.mode == 'ci' && inputs.image_name != ''
-      uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
 
     - name: Set up Docker Buildx (CI)
       if: inputs.mode == 'ci' && inputs.image_name != ''
-      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
     - name: Log in to GHCR (CI)
       if: inputs.mode == 'ci' && inputs.image_name != ''
-      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
       with:
         registry: ${{ inputs.registry }}
         username: ${{ github.actor }}
@@ -468,7 +468,7 @@ runs:
 
     - name: Set up Node.js (semantic-release-npm)
       if: inputs.mode == 'release' && inputs.versioning-tool == 'semantic-release-npm'
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: '20'
 
@@ -506,14 +506,14 @@ runs:
 
     - name: Install GitVersion
       if: inputs.mode == 'release' && inputs.versioning-tool == 'gitversion'
-      uses: gittools/actions/gitversion/setup@v3
+      uses: gittools/actions/gitversion/setup@v4
       with:
         versionSpec: ${{ inputs.gitversion-spec }}
 
     - name: Execute GitVersion
       id: gitversion
       if: inputs.mode == 'release' && inputs.versioning-tool == 'gitversion'
-      uses: gittools/actions/gitversion/execute@v3
+      uses: gittools/actions/gitversion/execute@v4
       with:
         useConfigFile: true
         configFilePath: ${{ inputs.gitversion-config }}
@@ -590,7 +590,7 @@ runs:
     - name: Run release-please
       id: release-please
       if: inputs.mode == 'release' && inputs.versioning-tool == 'release-please'
-      uses: googleapis/release-please-action@v4
+      uses: googleapis/release-please-action@v5
       with:
         token: ${{ steps.auth.outputs.token }}
         release-type: ${{ inputs.release-please-release-type }}
@@ -652,11 +652,11 @@ runs:
 
     - name: Set up Docker Buildx (release)
       if: inputs.mode == 'release' && inputs.image_name != '' && steps.normalize.outputs.released == 'true'
-      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
     - name: Log in to GHCR (release)
       if: inputs.mode == 'release' && inputs.image_name != '' && steps.normalize.outputs.released == 'true'
-      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
       with:
         registry: ${{ inputs.registry }}
         username: ${{ github.actor }}
