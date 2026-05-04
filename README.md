@@ -1,4 +1,14 @@
+<p align="center">
+  <img src="docs/release-runner-logo.png" alt="Release Runner" width="200">
+</p>
+
 # Release Runner
+
+[![CI](https://github.com/calebsargeant/semantic-release/actions/workflows/ci.yaml/badge.svg)](https://github.com/calebsargeant/semantic-release/actions/workflows/ci.yaml)
+[![Release](https://github.com/calebsargeant/semantic-release/actions/workflows/release.yaml/badge.svg)](https://github.com/calebsargeant/semantic-release/actions/workflows/release.yaml)
+[![Docs](https://github.com/calebsargeant/semantic-release/actions/workflows/docs-pages.yaml/badge.svg)](https://semver.calebsargeant.com)
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Release%20Runner-purple?logo=github)](https://github.com/marketplace/actions/release-runner)
+[![License](https://img.shields.io/github/license/calebsargeant/semantic-release)](https://github.com/calebsargeant/semantic-release/blob/main/LICENSE)
 
 Release Runner is the GitHub Marketplace Action published as
 `calebsargeant/semantic-release@v1`.

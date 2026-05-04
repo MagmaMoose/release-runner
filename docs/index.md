@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="release-runner-logo.png" alt="Release Runner" width="200">
+</p>
+
 # Release Runner
 
 Release Runner is the GitHub Marketplace Action published as

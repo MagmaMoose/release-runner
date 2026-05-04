@@ -4,6 +4,8 @@ repo_name: calebsargeant/semantic-release
 repo_url: https://github.com/calebsargeant/semantic-release
 theme:
   name: material
+  logo: release-runner-logo.png
+  favicon: release-runner-logo.png
   features:
     - navigation.tabs
     - navigation.top
