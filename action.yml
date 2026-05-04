@@ -13,10 +13,9 @@ inputs:
   # ── Mode ─────────────────────────────────────────────────────────────────
   mode:
     description: |
-      ci       Build Docker image and push pr-<N> to GHCR (run on pull_request events).
-      release  (default) Run versioning, promote Docker image, and optionally
-               create a promotion PR (when deployment-model is tbd-pr and
-               create-promotion-pr is true).
+      Pipeline mode. One of:
+        ci       Build Docker image and push pr-<N> to GHCR (run on pull_request events).
+        release  (default) Run versioning, promote Docker image, and optionally create a promotion PR (when deployment-model is tbd-pr and create-promotion-pr is true).
     required: false
     default: 'release'
 
@@ -24,12 +23,10 @@ inputs:
   auth-mode:
     description: |
       Token source for git/release operations. One of:
-        public-app   (default) Use the Release Runner GitHub App installed
-                     on the repository or organization.
-        auto         Use private-app when app-id/app-private-key are set,
-                     otherwise use github-token/GITHUB_TOKEN.
-        github-token Use github-token or the workflow GITHUB_TOKEN.
-        private-app  Generate a token from app-id/app-private-key.
+        public-app    (default) Use the Release Runner GitHub App installed on the repository or organization.
+        auto          Use private-app when app-id/app-private-key are set, otherwise use github-token/GITHUB_TOKEN.
+        github-token  Use github-token or the workflow GITHUB_TOKEN.
+        private-app   Generate a token from app-id/app-private-key.
     required: false
     default: 'public-app'
 
@@ -59,11 +56,10 @@ inputs:
   # ── Deployment model ─────────────────────────────────────────────────────
   deployment-model:
     description: |
-      Controls how the target environment is determined.
+      Controls how the target environment is determined. One of:
         tbd       (default) Trunk-Based Development. Pass `environment` explicitly.
         bbd       Branch-Based Development. Environment inferred from branch-map.
-        tbd-pr    TBD with PR-based promotion. Environment detected from the merged
-                  promote/* PR head branch.
+        tbd-pr    TBD with PR-based promotion. Environment detected from the merged promote/* PR head branch.
     required: false
     default: 'tbd'
 

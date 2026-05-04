@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import re
+from collections import OrderedDict
 from pathlib import Path
 
 import yaml
@@ -9,6 +11,61 @@ import yaml
 ROOT_DIR = Path(__file__).resolve().parents[1]
 ACTION_FILE = ROOT_DIR / "action.yml"
 OUTPUT_FILE = ROOT_DIR / "docs/reference/action-inputs-outputs.md"
+
+# Matches indented value lines like "  public-app   Description text here"
+_VALUE_LINE_RE = re.compile(r"^\s{2,}(\S+)\s{2,}(.+)$")
+
+# Ordered input groups: (section title, [input names])
+INPUT_GROUPS: list[tuple[str, list[str]]] = [
+  ("Core", [
+    "mode",
+    "environment",
+    "environments",
+    "prerelease-identifiers",
+    "tag-prefix",
+  ]),
+  ("Versioning tool", [
+    "versioning-tool",
+    "create-release",
+    "changelog",
+    "working-directory",
+  ]),
+  ("Deployment model", [
+    "deployment-model",
+    "branch-map",
+    "promote-branch-prefix",
+    "promote-target-branch",
+    "create-promotion-pr",
+  ]),
+  ("Authentication", [
+    "auth-mode",
+    "github-token",
+    "app-id",
+    "app-private-key",
+    "token-broker-url",
+    "oidc-audience",
+  ]),
+  ("Docker", [
+    "image_name",
+    "bake_file",
+    "bake_target",
+    "registry",
+    "platforms",
+  ]),
+  ("CI checks", [
+    "enforce_branch_naming",
+  ]),
+  ("GitVersion", [
+    "gitversion-spec",
+    "gitversion-config",
+    "gitversion-appsettings-file",
+    "gitversion-appsettings-version-path",
+  ]),
+  ("release-please", [
+    "release-please-release-type",
+    "release-please-config-file",
+  ]),
+]
 
 
 def normalize_description(value: object | None) -> str:
@@ -31,12 +88,76 @@ def render_default(value: object | None) -> str:
   return inline_code(value)
 
 
-def render_value(value: object | None) -> str:
-  if value is None:
-    return "_Not set._"
-  if isinstance(value, str) and value == "":
-    return "`''`"
-  return inline_code(value)
+def _extract_allowed_values(description: str) -> tuple[str, list[tuple[str, str]]]:
+  """Split a description into prose and an allowed-values table.
+
+  Returns (prose, [(value, explanation), ...]).
+  If no enumerated values are found, the table list is empty.
+  """
+  raw_lines = description.splitlines()
+  prose_lines: list[str] = []
+  value_entries: list[tuple[str, str]] = []
+  collecting_values = False
+
+  for line in raw_lines:
+    m = _VALUE_LINE_RE.match(line)
+    if m:
+      collecting_values = True
+      value_entries.append((m.group(1), m.group(2).strip()))
+    else:
+      if collecting_values:
+        # Continuation line for the previous value description
+        stripped = line.strip()
+        if stripped and value_entries:
+          prev_val, prev_desc = value_entries[-1]
+          value_entries[-1] = (prev_val, f"{prev_desc} {stripped}")
+        continue
+      prose_lines.append(line)
+
+  prose = "\n".join(prose_lines).strip()
+  return prose, value_entries
+
+
+def render_input(input_name: str, input_spec: dict[str, object]) -> list[str]:
+  """Render a single input entry."""
+  lines: list[str] = []
+  required = bool(input_spec.get("required", False))
+  default = input_spec.get("default")
+  description = normalize_description(input_spec.get("description"))
+
+  lines.extend(
+    [
+      f"### `{input_name}`",
+      "",
+      f"- Required: `{str(required).lower()}`",
+      f"- Default: {render_default(default)}",
+      "",
+    ]
+  )
+
+  if not description:
+    lines.extend(["_No description provided._", ""])
+    return lines
+
+  prose, allowed = _extract_allowed_values(description)
+
+  if prose:
+    lines.extend([prose, ""])
+
+  if allowed:
+    lines.extend(
+      [
+        "| Value | Description |",
+        "|---|---|",
+      ]
+    )
+    for val, desc in allowed:
+      lines.append(f"| `{val}` | {desc} |")
+    lines.append("")
+  elif not prose:
+    lines.extend(["_No description provided._", ""])
+
+  return lines
 
 
 def render_inputs(inputs: dict[str, dict[str, object]]) -> list[str]:
@@ -46,29 +167,31 @@ def render_inputs(inputs: dict[str, dict[str, object]]) -> list[str]:
     lines.extend(["_No inputs defined._", ""])
     return lines
 
-  for input_name, input_spec in inputs.items():
-    required = bool(input_spec.get("required", False))
-    default = input_spec.get("default")
-    description = normalize_description(input_spec.get("description"))
+  # Track which inputs we've rendered so we can catch any ungrouped ones
+  rendered: set[str] = set()
 
-    lines.extend(
-      [
-        f"### `{input_name}`",
-        "",
-        f"- Required: `{str(required).lower()}`",
-        f"- Default: {render_default(default)}",
-        "",
-        "Description:",
-        "",
-      ]
-    )
+  for section_title, input_names in INPUT_GROUPS:
+    section_inputs = [(n, inputs[n]) for n in input_names if n in inputs]
+    if not section_inputs:
+      continue
 
-    if description:
-      lines.extend(description.splitlines())
-    else:
-      lines.append("_No description provided._")
+    lines.extend([f"### {section_title}", ""])
 
-    lines.append("")
+    for input_name, input_spec in section_inputs:
+      rendered.add(input_name)
+      entry = render_input(input_name, input_spec)
+      # Demote ### to #### inside sections
+      entry = [line.replace("### ", "#### ", 1) if line.startswith("### `") else line for line in entry]
+      lines.extend(entry)
+
+  # Render any inputs not covered by groups
+  ungrouped = [n for n in inputs if n not in rendered]
+  if ungrouped:
+    lines.extend(["### Other", ""])
+    for input_name in ungrouped:
+      entry = render_input(input_name, inputs[input_name])
+      entry = [line.replace("### ", "#### ", 1) if line.startswith("### `") else line for line in entry]
+      lines.extend(entry)
 
   return lines
 
@@ -81,26 +204,20 @@ def render_outputs(outputs: dict[str, dict[str, object]]) -> list[str]:
     return lines
 
   for output_name, output_spec in outputs.items():
-    value = output_spec.get("value")
     description = normalize_description(output_spec.get("description"))
 
     lines.extend(
       [
         f"### `{output_name}`",
         "",
-        f"- Value: {render_value(value)}",
-        "",
-        "Description:",
-        "",
       ]
     )
 
     if description:
-      lines.extend(description.splitlines())
+      lines.extend([description, ""])
     else:
       lines.append("_No description provided._")
-
-    lines.append("")
+      lines.append("")
 
   return lines
 
@@ -122,11 +239,6 @@ def main() -> None:
     "",
     "This page is generated from `action.yml` by `scripts/generate-action-reference.py`.",
     "Do not edit this file manually.",
-    "",
-    "## Source",
-    "",
-    "- Action definition: `action.yml`",
-    "- Generator script: `scripts/generate-action-reference.py`",
     "",
   ]
   lines.extend(render_inputs(inputs))

@@ -11,24 +11,31 @@ Full setup docs: [semver.calebsargeant.com](https://semver.calebsargeant.com)
 
 ## What You Need
 
-### Install the Release Runner GitHub App
+### 1. Install the Release Runner GitHub App
 
-If you use the default `public-app` auth mode (recommended), install the
-[Release Runner GitHub App](https://github.com/apps/release-runner/installations/new)
-on the repository or organization before your first release run.
-Alternatively you can use a private GitHub App or the built-in workflow token.
-See [Release Write Token](https://semver.calebsargeant.com/concepts/#release-write-token)
-for all available auth modes.
+If you use the default `public-app` auth mode (recommended):
 
-### Bypass Branch Rulesets
+- Install the [Release Runner GitHub App](https://github.com/apps/release-runner/installations/new)
+  on the repository or organization before your first release run.
+- Alternatively, you can use a
+  [private GitHub App or the built-in workflow token](https://semver.calebsargeant.com/concepts/#release-write-token).
 
-If branch rulesets or branch protection rules guard your release branches, allow
-the Release Runner app to bypass the rules it needs for tags, release commits,
-and promotion branches. Without this, the app cannot push tags or version bumps.
+### 2. Bypass Branch Rulesets
 
-### Choose a Release Tool
+If branch rulesets or branch protection rules guard your release branches,
+allow the Release Runner app to bypass:
 
-Add one supported release-tool config to your repository.
+- Tag creation and pushes
+- Release commits (when the versioning tool updates files)
+- Promotion branches (`promote/<environment>/<version>`)
+- Opening promotion pull requests
+
+Without this, the app cannot push tags or version bumps.
+See the full [branch protection checklist](https://semver.calebsargeant.com/organization-setup/#branch-protection-checklist).
+
+### 3. Choose a Release Tool
+
+Add one supported release-tool config to your repository:
 
 | Tool | Input | Config file |
 |---|---|---|
@@ -37,18 +44,19 @@ Add one supported release-tool config to your repository.
 | GitVersion | `gitversion` | `GitVersion.yml` |
 | release-please | `release-please` | `release-please-config.json` |
 
-The semantic-release and release-please examples use
-[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/), where
-`fix` creates a patch release, `feat` creates a minor release, and breaking
-changes create major releases. GitVersion follows your `GitVersion.yml`.
+- semantic-release and release-please use
+  [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) —
+  `fix` → patch, `feat` → minor, breaking changes → major.
+- GitVersion follows your `GitVersion.yml`.
 
 ## Production Release
 
 This creates stable releases from `main`, for example `v1.0.0`.
 
-Before running it with the default auth mode, complete the
-[setup steps above](#what-you-need) (install the GitHub App, configure branch
-ruleset bypass) and give the release job `id-token: write`.
+Before running it with the default auth mode:
+
+- Complete the [setup steps above](#what-you-need).
+- Give the release job `id-token: write`.
 
 ```yaml
 name: Release
@@ -74,103 +82,30 @@ jobs:
 ```
 
 By default, release jobs use the Release Runner GitHub App.
-
-To use the workflow token instead:
-
-```yaml
-permissions:
-  contents: write
-
-steps:
-  - uses: calebsargeant/semantic-release@v1
-    with:
-      mode: release
-      auth-mode: github-token
-      github-token: ${{ secrets.GITHUB_TOKEN }}
-      environment: prod
-      environments: '["prod"]'
-      prerelease-identifiers: '{}'
-```
+[Other auth modes](https://semver.calebsargeant.com/concepts/#release-write-token)
+are also supported.
 
 ## Docker Image Releases
 
-Set `image_name` when the release should also tag a GHCR image.
+Set `image_name` to build PR images in CI mode and promote or rebuild them
+with the release tag in release mode:
 
-For pull requests, build a `pr-<number>` image:
-
-```yaml
-name: CI
-
-on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      pull-requests: read
-    steps:
-      - uses: calebsargeant/semantic-release@v1
-        with:
-          mode: ci
-          image_name: my-app
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-```
-
-For releases, promote or rebuild the image with the release tag:
-
-```yaml
-- uses: calebsargeant/semantic-release@v1
-  with:
-    mode: release
-    environment: prod
-    environments: '["prod"]'
-    prerelease-identifiers: '{}'
-    image_name: my-app
-```
-
-Your Docker Bake file must use the variables `REGISTRY`, `IMAGE_NAME`,
-`VERSION`, and `PLATFORMS`.
-
-```hcl
-variable "VERSION"    { default = "latest" }
-variable "REGISTRY"   { default = "ghcr.io" }
-variable "IMAGE_NAME" { default = "my-org/my-app" }
-variable "PLATFORMS"  { default = "linux/amd64" }
-
-target "default" {
-  context    = "."
-  dockerfile = "Dockerfile"
-  platforms  = split(",", PLATFORMS)
-  tags       = ["${REGISTRY}/${IMAGE_NAME}:${VERSION}"]
-}
-```
+- Your repository needs a [Docker Bake file](https://semver.calebsargeant.com/repository-setup/#2-choose-docker-or-version-only)
+  that declares the `REGISTRY`, `IMAGE_NAME`, `VERSION`, and `PLATFORMS` variables.
+- CI mode builds `pr-<number>` images from pull requests.
+- Release mode promotes or rebuilds the image with the release tag.
 
 ## Environment Releases
 
-Release Runner supports two release models.
+Release Runner supports multiple environments with
+[two release models](https://semver.calebsargeant.com/choose-your-setup/):
 
-| Model | Use when | Docs |
-|---|---|---|
-| Trunk-Based Development | One branch creates release tags for one or more environments | [TBD setup](https://semver.calebsargeant.com/choose-your-setup/#trunk-based-development) |
-| Branch-Based Development | Long-lived branches map to environments | [BBD setup](https://semver.calebsargeant.com/choose-your-setup/#branch-based-development) |
+- **Trunk-Based Development** — one branch creates release tags for one or
+  more environments.
+- **Branch-Based Development** — long-lived branches map to environments.
 
 For example, `["dev", "staging", "prod"]` creates prerelease tags for `dev`
 and `staging`, then stable tags for `prod`.
-
-```yaml
-with:
-  mode: release
-  deployment-model: tbd-pr
-  environment: ${{ github.event_name == 'push' && 'dev' || '' }}
-  environments: '["dev", "staging", "prod"]'
-  prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
-  create-promotion-pr: 'true'
-```
 
 ## Outputs
 
@@ -182,6 +117,5 @@ with:
 | `is-prerelease` | `true` for prerelease environments |
 | `resolved-environment` | Environment selected for the run |
 
-Use the full docs for setup choices, authentication details, release models,
-Docker promotion behavior, and the generated input/output reference:
-[semver.calebsargeant.com](https://semver.calebsargeant.com).
+For the complete input/output reference, see the
+[action reference](https://semver.calebsargeant.com/reference/action-inputs-outputs/).
