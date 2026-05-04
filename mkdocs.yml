@@ -1,0 +1,21 @@
+site_name: Release Runner
+site_description: Setup and reference documentation for calebsargeant/semantic-release@v1.
+repo_name: calebsargeant/semantic-release
+repo_url: https://github.com/calebsargeant/semantic-release
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.top
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+nav:
+  - Home: index.md
+  - Setup:
+      - Organization: organization-setup.md
+      - Choose your setup: choose-your-setup.md
+      - Repository: repository-setup.md
+  - Reference:
+      - Action inputs and outputs: reference/action-inputs-outputs.md

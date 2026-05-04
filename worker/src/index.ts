@@ -10,7 +10,7 @@ const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const GITHUB_OIDC_JWKS_URL =
   "https://token.actions.githubusercontent.com/.well-known/jwks";
 const GITHUB_API_VERSION = "2022-11-28";
-const DEFAULT_AUDIENCE = "semantic-release-token-broker";
+const DEFAULT_AUDIENCE = "release-runner";
 const DEFAULT_PERMISSIONS: TokenPermissions = {
   contents: "write",
   pull_requests: "write"
@@ -212,15 +212,19 @@ async function createGitHubAppJwt(
   privateKey: string,
   now: Date
 ): Promise<string> {
-  const epochSeconds = Math.floor(now.getTime() / 1000);
-  const key = await importPKCS8(normalizePrivateKey(privateKey), "RS256");
+  try {
+    const epochSeconds = Math.floor(now.getTime() / 1000);
+    const key = await importPKCS8(normalizePrivateKey(privateKey), "RS256");
 
-  return new SignJWT({})
-    .setProtectedHeader({ alg: "RS256", typ: "JWT" })
-    .setIssuedAt(epochSeconds - 60)
-    .setExpirationTime(epochSeconds + 9 * 60)
-    .setIssuer(appId)
-    .sign(key);
+    return await new SignJWT({})
+      .setProtectedHeader({ alg: "RS256", typ: "JWT" })
+      .setIssuedAt(epochSeconds - 60)
+      .setExpirationTime(epochSeconds + 9 * 60)
+      .setIssuer(appId)
+      .sign(key);
+  } catch {
+    throw new HttpError(500, "github_app_private_key_invalid");
+  }
 }
 
 async function findInstallationId(
@@ -297,7 +301,7 @@ function githubHeaders(appJwt: string): HeadersInit {
   return {
     accept: "application/vnd.github+json",
     authorization: `Bearer ${appJwt}`,
-    "user-agent": "calebsargeant-semantic-release-token-broker",
+    "user-agent": "calebsargeant-release-runner",
     "x-github-api-version": GITHUB_API_VERSION
   };
 }
@@ -387,7 +391,81 @@ function assertRepositoryParts(owner: string, repo: string): void {
 }
 
 function normalizePrivateKey(privateKey: string): string {
-  return privateKey.replace(/\\n/g, "\n");
+  const normalized = privateKey.replace(/\\n/g, "\n").trim();
+  if (normalized.includes("-----BEGIN RSA PRIVATE KEY-----")) {
+    return convertPkcs1ToPkcs8Pem(normalized);
+  }
+  return normalized;
+}
+
+function convertPkcs1ToPkcs8Pem(pkcs1Pem: string): string {
+  const pkcs1Der = base64ToBytes(pemBody(pkcs1Pem));
+  const version = der(0x02, new Uint8Array([0x00]));
+  const rsaEncryptionOid = new Uint8Array([
+    0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01
+  ]);
+  const nullParameter = new Uint8Array([0x05, 0x00]);
+  const algorithmIdentifier = der(0x30, concat(rsaEncryptionOid, nullParameter));
+  const privateKey = der(0x04, pkcs1Der);
+  const pkcs8Der = der(0x30, concat(version, algorithmIdentifier, privateKey));
+  return pem("PRIVATE KEY", pkcs8Der);
+}
+
+function pemBody(value: string): string {
+  return value
+    .replace(/-----BEGIN [^-]+-----/g, "")
+    .replace(/-----END [^-]+-----/g, "")
+    .replace(/\s+/g, "");
+}
+
+function pem(label: string, bytes: Uint8Array): string {
+  const body = bytesToBase64(bytes)
+    .replace(/(.{64})/g, "$1\n")
+    .trim();
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----`;
+}
+
+function der(tag: number, content: Uint8Array): Uint8Array {
+  return concat(new Uint8Array([tag]), derLength(content.length), content);
+}
+
+function derLength(length: number): Uint8Array {
+  if (length < 0x80) {
+    return new Uint8Array([length]);
+  }
+
+  const bytes: number[] = [];
+  let value = length;
+  while (value > 0) {
+    bytes.unshift(value & 0xff);
+    value >>= 8;
+  }
+
+  return new Uint8Array([0x80 | bytes.length, ...bytes]);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function concat(...arrays: Uint8Array[]): Uint8Array {
+  const length = arrays.reduce((total, array) => total + array.length, 0);
+  const result = new Uint8Array(length);
+  let offset = 0;
+  for (const array of arrays) {
+    result.set(array, offset);
+    offset += array.length;
+  }
+  return result;
 }
 
 function requiredSecret(value: string | undefined, name: string): string {

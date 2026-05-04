@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-broker_url="${TOKEN_BROKER_URL:-}"
-audience="${OIDC_AUDIENCE:-semantic-release-token-broker}"
+broker_url="${TOKEN_BROKER_URL:-https://release-runner.sargeant.workers.dev}"
+audience="${OIDC_AUDIENCE:-release-runner}"
 request_url="${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
 request_token="${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
 repository="${GITHUB_REPOSITORY:-}"
