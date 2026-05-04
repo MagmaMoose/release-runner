@@ -74,7 +74,6 @@ Run from repository root unless noted.
 
 - Repository release publication flows:
   - `.github/workflows/release.yaml` self-releases this action via `uses: ./` (prod-only environment), then force-updates the floating major tag (`v1`, `v2`, ...) using a broker token from `scripts/request-public-app-token.sh`.
-  - `.github/workflows/publish-immutable-actions.yml` runs on published releases to publish an immutable action version via `actions/publish-immutable-action@v0.0.4`.
 
 ### 2) Auth/token model
 - `scripts/resolve-auth-token.sh` is the single token-selection gate used by the action:
