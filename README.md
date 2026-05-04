@@ -11,8 +11,24 @@ Full setup docs: [semver.calebsargeant.com](https://semver.calebsargeant.com)
 
 ## What You Need
 
-Before using the action, add one supported release-tool config to your
-repository.
+### Install the Release Runner GitHub App
+
+If you use the default `public-app` auth mode (recommended), install the
+[Release Runner GitHub App](https://github.com/apps/release-runner/installations/new)
+on the repository or organization before your first release run.
+Alternatively you can use a private GitHub App or the built-in workflow token.
+See [Release Write Token](https://semver.calebsargeant.com/concepts/#release-write-token)
+for all available auth modes.
+
+### Bypass Branch Rulesets
+
+If branch rulesets or branch protection rules guard your release branches, allow
+the Release Runner app to bypass the rules it needs for tags, release commits,
+and promotion branches. Without this, the app cannot push tags or version bumps.
+
+### Choose a Release Tool
+
+Add one supported release-tool config to your repository.
 
 | Tool | Input | Config file |
 |---|---|---|
@@ -29,6 +45,10 @@ changes create major releases. GitVersion follows your `GitVersion.yml`.
 ## Production Release
 
 This creates stable releases from `main`, for example `v1.0.0`.
+
+Before running it with the default auth mode, complete the
+[setup steps above](#what-you-need) (install the GitHub App, configure branch
+ruleset bypass) and give the release job `id-token: write`.
 
 ```yaml
 name: Release
@@ -54,8 +74,6 @@ jobs:
 ```
 
 By default, release jobs use the Release Runner GitHub App.
-[Install the app](https://github.com/apps/release-runner/installations/new) on
-the repository or organization, then give the job `id-token: write`.
 
 To use the workflow token instead:
 
