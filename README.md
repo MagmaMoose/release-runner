@@ -133,7 +133,7 @@ For the complete input/output reference, see the
 ## Sponsor
 
 If Release Runner saves you time or helps your team ship more reliably,
-consider sponsoring the project.
+consider supporting its development:
 
-[❤️ Sponsor on GitHub](https://github.com/sponsors/CalebSargeant)
-
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-♥-ea4aaa?logo=github)](https://github.com/sponsors/CalebSargeant)
+[![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Support-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/calebsargeant)
