@@ -366,18 +366,13 @@ runs:
           SCOPE="bk-${TARGET}-${{ github.ref_name }}"
           CACHE_ARGS+=(--set "${TARGET}.cache-from=type=gha,scope=${SCOPE}")
           CACHE_ARGS+=(--set "${TARGET}.cache-to=type=gha,mode=max,scope=${SCOPE}")
+          [ -n "${BAKE_GITHUB_TOKEN}" ] && CACHE_ARGS+=(--set "${TARGET}.secret=id=github_token,env=BAKE_GITHUB_TOKEN")
         done
-
-        SECRET_ARGS=()
-        if [ -n "${BAKE_GITHUB_TOKEN}" ]; then
-          SECRET_ARGS+=(--secret "id=github_token,env=BAKE_GITHUB_TOKEN")
-        fi
 
         docker buildx bake \
           -f "${{ inputs.bake_file }}" \
           "${{ inputs.bake_target }}" \
           "${CACHE_ARGS[@]}" \
-          "${SECRET_ARGS[@]}" \
           --push
       env:
         VERSION: pr-${{ github.event.pull_request.number }}
@@ -805,15 +800,15 @@ runs:
             echo "Fresh build fallback for ${IMAGE} (${TARGET})"
             EXTRA_TAGS=""
             [ "${IS_PRERELEASE}" == "false" ] && EXTRA_TAGS="--set ${TARGET}.tags=${IMAGE}:latest"
-            FRESH_SECRET_ARGS=()
-            [ -n "${BAKE_GITHUB_TOKEN}" ] && FRESH_SECRET_ARGS+=(--secret "id=github_token,env=BAKE_GITHUB_TOKEN")
+            FRESH_SECRET=""
+            [ -n "${BAKE_GITHUB_TOKEN}" ] && FRESH_SECRET="--set ${TARGET}.secret=id=github_token,env=BAKE_GITHUB_TOKEN"
             docker buildx bake \
               -f "${{ inputs.bake_file }}" "${TARGET}" \
               --set "${TARGET}.tags=${NEW_TAG}" \
               ${EXTRA_TAGS} \
               --set "${TARGET}.cache-from=type=gha,scope=buildkit-${TARGET}" \
               --set "${TARGET}.cache-to=type=gha,mode=max,scope=buildkit-${TARGET}" \
-              "${FRESH_SECRET_ARGS[@]}" \
+              ${FRESH_SECRET} \
               --push
           fi
         done
