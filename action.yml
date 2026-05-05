@@ -172,6 +172,15 @@ inputs:
     required: false
     default: 'linux/amd64'
 
+  build-github-token:
+    description: |
+      Optional token passed as --secret id=github_token to docker buildx bake.
+      Use when Dockerfiles use --mount=type=secret,id=github_token to pull
+      private packages (e.g. GitHub Packages).
+      Example: ${{ secrets.NPM_TOKEN || secrets.GITHUB_TOKEN }}
+    required: false
+    default: ''
+
   # ── CI-specific ──────────────────────────────────────────────────────────
   enforce_branch_naming:
     description: |
@@ -359,15 +368,22 @@ runs:
           CACHE_ARGS+=(--set "${TARGET}.cache-to=type=gha,mode=max,scope=${SCOPE}")
         done
 
+        SECRET_ARGS=()
+        if [ -n "${BAKE_GITHUB_TOKEN}" ]; then
+          SECRET_ARGS+=(--secret "id=github_token,env=BAKE_GITHUB_TOKEN")
+        fi
+
         docker buildx bake \
           -f "${{ inputs.bake_file }}" \
           "${{ inputs.bake_target }}" \
           "${CACHE_ARGS[@]}" \
+          "${SECRET_ARGS[@]}" \
           --push
       env:
         VERSION: pr-${{ github.event.pull_request.number }}
         REGISTRY: ${{ inputs.registry }}
         PLATFORMS: ${{ inputs.platforms }}
+        BAKE_GITHUB_TOKEN: ${{ inputs.build-github-token }}
 
     # ═════════════════════════════════════════════════════════════════════════
     # RELEASE MODE — versioning
@@ -663,6 +679,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.auth.outputs.token }}
+        BAKE_GITHUB_TOKEN: ${{ inputs.build-github-token }}
       run: |
         set -euo pipefail
 
@@ -788,12 +805,15 @@ runs:
             echo "Fresh build fallback for ${IMAGE} (${TARGET})"
             EXTRA_TAGS=""
             [ "${IS_PRERELEASE}" == "false" ] && EXTRA_TAGS="--set ${TARGET}.tags=${IMAGE}:latest"
+            FRESH_SECRET_ARGS=()
+            [ -n "${BAKE_GITHUB_TOKEN}" ] && FRESH_SECRET_ARGS+=(--secret "id=github_token,env=BAKE_GITHUB_TOKEN")
             docker buildx bake \
               -f "${{ inputs.bake_file }}" "${TARGET}" \
               --set "${TARGET}.tags=${NEW_TAG}" \
               ${EXTRA_TAGS} \
               --set "${TARGET}.cache-from=type=gha,scope=buildkit-${TARGET}" \
               --set "${TARGET}.cache-to=type=gha,mode=max,scope=buildkit-${TARGET}" \
+              "${FRESH_SECRET_ARGS[@]}" \
               --push
           fi
         done
