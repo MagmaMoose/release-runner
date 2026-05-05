@@ -493,6 +493,8 @@ runs:
         set -euo pipefail
         IS_PRERELEASE="${{ steps.detect-env.outputs.is_prerelease }}"
         IDENTIFIER="${{ steps.detect-env.outputs.prerelease_identifier }}"
+        PREFIX="${{ inputs.tag-prefix }}"
+
         if ! npx --no semantic-release --version &>/dev/null; then
           npm install --no-save \
             semantic-release \
@@ -502,10 +504,54 @@ runs:
             @semantic-release/github \
             @semantic-release/release-notes-generator
         fi
-        [ "${IS_PRERELEASE}" == "true" ] && export PRERELEASE_CHANNEL="${IDENTIFIER}"
-        npx semantic-release
-        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-        echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+
+        if [ "${IS_PRERELEASE}" == "true" ]; then
+          # semantic-release v24 ignores --prerelease on stable branches.
+          # Dry-run to get the next stable version, then manually create the
+          # prerelease tag and GitHub Release without touching package.json or
+          # CHANGELOG (those are committed on stable promotion).
+          NEXT_VER=$(npx semantic-release --dry-run 2>&1 | \
+            grep -E "The next release version is" | \
+            grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+          if [ -n "${NEXT_VER}" ]; then
+            PRE_NUM=1
+            EXISTING=$(git tag -l "${PREFIX}${NEXT_VER}-${IDENTIFIER}.*" 2>/dev/null | sort -V | tail -1 || true)
+            if [ -n "${EXISTING}" ]; then
+              LAST_NUM="${EXISTING##*.}"
+              PRE_NUM=$(( LAST_NUM + 1 ))
+            fi
+            NEW_TAG="${PREFIX}${NEXT_VER}-${IDENTIFIER}.${PRE_NUM}"
+            echo "Creating prerelease tag: ${NEW_TAG}"
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "${NEW_TAG}"
+            REMOTE_URL=$(git remote get-url origin)
+            AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GITHUB_TOKEN}@|")
+            git push "${AUTHED_URL}" "${NEW_TAG}"
+            if [ "${{ inputs.create-release }}" == "true" ]; then
+              gh release create "${NEW_TAG}" --prerelease \
+                --title "${NEW_TAG}" \
+                --notes "Pre-release ${IDENTIFIER}.${PRE_NUM} for version ${NEXT_VER}"
+            fi
+            echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
+            echo "released=true"         >> "$GITHUB_OUTPUT"
+          else
+            echo "No relevant commits for prerelease — skipping"
+            EXISTING_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            echo "latest_tag=${EXISTING_TAG}" >> "$GITHUB_OUTPUT"
+            echo "released=false"             >> "$GITHUB_OUTPUT"
+          fi
+        else
+          PRE_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          npx semantic-release
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+          if [ -n "${LATEST_TAG}" ] && [ "${LATEST_TAG}" != "${PRE_TAG}" ]; then
+            echo "released=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+        fi
 
     - name: Install GitVersion
       if: inputs.mode == 'release' && inputs.versioning-tool == 'gitversion'
@@ -618,10 +664,10 @@ runs:
             ;;
           semantic-release-npm)
             LATEST_TAG="${{ steps.semrel-npm.outputs.latest_tag }}"
+            RELEASED="${{ steps.semrel-npm.outputs.released }}"
             if [ -n "${LATEST_TAG}" ]; then
               VERSION="${LATEST_TAG#${PREFIX}}"
               TAG="${LATEST_TAG}"
-              RELEASED="true"
             fi
             ;;
           gitversion)
