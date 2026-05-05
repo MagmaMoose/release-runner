@@ -494,6 +494,8 @@ runs:
         IS_PRERELEASE="${{ steps.detect-env.outputs.is_prerelease }}"
         IDENTIFIER="${{ steps.detect-env.outputs.prerelease_identifier }}"
         PREFIX="${{ inputs.tag-prefix }}"
+        PROMOTE_PREFIX="${{ inputs.promote-branch-prefix }}"
+        HEAD_REF="${GITHUB_HEAD_REF:-}"
 
         if ! npx --no semantic-release --version &>/dev/null; then
           npm install --no-save \
@@ -506,17 +508,40 @@ runs:
         fi
 
         if [ "${IS_PRERELEASE}" == "true" ]; then
-          # semantic-release v24 ignores --prerelease on stable branches.
-          # Dry-run to get the next stable version, then manually create the
-          # prerelease tag and GitHub Release without touching package.json or
-          # CHANGELOG (those are committed on stable promotion).
-          DRY_RUN_OUTPUT=$(npx semantic-release --dry-run 2>&1 || true)
-          echo "=== semantic-release dry-run output ==="
-          echo "${DRY_RUN_OUTPUT}"
-          echo "======================================="
-          NEXT_VER=$(echo "${DRY_RUN_OUTPUT}" | \
-            grep -iE "the next release version is" | \
-            grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+          NEXT_VER=""
+
+          if echo "${HEAD_REF}" | grep -qE "^${PROMOTE_PREFIX}/[^/]+/"; then
+            # Promotion PR: derive base version from the branch name.
+            # e.g. promote/staging/1.0.0-dev.1 → 1.0.0
+            BRANCH_VERSION=$(echo "${HEAD_REF}" | cut -d'/' -f3)
+            NEXT_VER=$(echo "${BRANCH_VERSION}" | sed 's/-[a-zA-Z][^.]*\.[0-9]*$//')
+            echo "Promotion: base version ${NEXT_VER} from branch ${HEAD_REF}"
+          else
+            # Direct push to trunk: skip if no new qualifying commits since the
+            # last prerelease tag for this identifier (prevents spurious releases
+            # when a promotion PR merge commit is the only change).
+            LAST_PRE_TAG=$(git tag -l "${PREFIX}*-${IDENTIFIER}.*" 2>/dev/null | sort -V | tail -1 || true)
+            if [ -n "${LAST_PRE_TAG}" ]; then
+              QUALIFYING=$(git log "${LAST_PRE_TAG}..HEAD" --pretty=format:"%s" 2>/dev/null | \
+                grep -cE "^(feat|fix|perf)(\(.+\))?(!)?:" || true)
+              if [ "${QUALIFYING:-0}" -eq 0 ]; then
+                echo "No qualifying commits since ${LAST_PRE_TAG} — skipping"
+                echo "latest_tag=${LAST_PRE_TAG}" >> "$GITHUB_OUTPUT"
+                echo "released=false"             >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            # semantic-release v24 ignores --prerelease on stable branches; use
+            # dry-run to get the next stable version, then create the tag manually.
+            DRY_RUN_OUTPUT=$(npx semantic-release --dry-run 2>&1 || true)
+            echo "=== semantic-release dry-run output ==="
+            echo "${DRY_RUN_OUTPUT}"
+            echo "======================================="
+            NEXT_VER=$(echo "${DRY_RUN_OUTPUT}" | \
+              grep -iE "the next release version is" | \
+              grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+          fi
+
           if [ -n "${NEXT_VER}" ]; then
             PRE_NUM=1
             EXISTING=$(git tag -l "${PREFIX}${NEXT_VER}-${IDENTIFIER}.*" 2>/dev/null | sort -V | tail -1 || true)
