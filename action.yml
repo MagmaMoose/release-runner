@@ -596,8 +596,10 @@ runs:
             echo "released=true"         >> "$GITHUB_OUTPUT"
           else
             # Direct push or workflow_dispatch: run semantic-release normally.
+            # Use || true so non-critical post-hook failures (e.g. PR label
+            # permissions) don't abort the step after the release is published.
             PRE_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-            npx semantic-release
+            npx semantic-release || echo "::warning::semantic-release exited non-zero (release may still have been created)"
             LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
             echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
             if [ -n "${LATEST_TAG}" ] && [ "${LATEST_TAG}" != "${PRE_TAG}" ]; then
