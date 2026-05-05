@@ -177,7 +177,7 @@ inputs:
       Optional token passed as --secret id=github_token to docker buildx bake.
       Use when Dockerfiles use --mount=type=secret,id=github_token to pull
       private packages (e.g. GitHub Packages).
-      Example: ${{ secrets.NPM_TOKEN || secrets.GITHUB_TOKEN }}
+      Pass secrets.NPM_TOKEN or secrets.GITHUB_TOKEN from the calling workflow.
     required: false
     default: ''
 
