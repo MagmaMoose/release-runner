@@ -502,11 +502,8 @@ runs:
             @semantic-release/github \
             @semantic-release/release-notes-generator
         fi
-        if [ "${IS_PRERELEASE}" == "true" ]; then
-          npx semantic-release --prerelease "${IDENTIFIER}"
-        else
-          npx semantic-release
-        fi
+        [ "${IS_PRERELEASE}" == "true" ] && export PRERELEASE_CHANNEL="${IDENTIFIER}"
+        npx semantic-release
         LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
         echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
 
