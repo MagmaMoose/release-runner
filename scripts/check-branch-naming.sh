@@ -2,7 +2,8 @@
 set -euo pipefail
 
 branch="${GITHUB_HEAD_REF:-}"
-allowed='^(feat|fix|chore|hotfix|docs|refactor|perf|test|ci|style)/'
+PROMOTE_PREFIX="${PROMOTE_BRANCH_PREFIX:-promote}"
+allowed="^(feat|fix|chore|hotfix|docs|refactor|perf|test|ci|style|${PROMOTE_PREFIX})/"
 
 if [[ -z "${branch}" ]]; then
   echo "::error::GITHUB_HEAD_REF is empty; branch naming can only be checked on pull_request events."

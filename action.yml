@@ -327,6 +327,8 @@ runs:
     - name: Check TBD branch naming
       if: inputs.mode == 'ci' && inputs.enforce_branch_naming == 'true' && github.event_name == 'pull_request'
       shell: bash
+      env:
+        PROMOTE_BRANCH_PREFIX: ${{ inputs.promote-branch-prefix }}
       run: "${GITHUB_ACTION_PATH}/scripts/check-branch-naming.sh"
 
     - name: Set up QEMU
