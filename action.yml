@@ -848,9 +848,9 @@ runs:
         AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GH_TOKEN}@|")
         git push "${AUTHED_URL}" "${BRANCH}"
 
-        gh pr create \
+        PR_URL=$(gh pr create \
           --title "chore(release): promote ${TAG} to ${NEXT_ENV}" \
           --body "Merging this PR will trigger the **${NEXT_ENV}** release for \`${TAG}\`." \
           --base "${TARGET}" \
-          --head "${BRANCH}" \
-          --label "promotion" || echo "::warning::PR already exists for ${BRANCH}"
+          --head "${BRANCH}") || { echo "::warning::PR already exists for ${BRANCH}"; exit 0; }
+        gh pr edit "${PR_URL}" --add-label "promotion" 2>/dev/null || true
