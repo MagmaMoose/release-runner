@@ -842,7 +842,7 @@ runs:
         printf 'Promote %s to %s.\n' "${TAG}" "${NEXT_ENV}" > ".github/promotions/${VERSION}-to-${NEXT_ENV}.md"
 
         git add ".github/promotions/${VERSION}-to-${NEXT_ENV}.md"
-        git commit -m "chore(release): promote ${TAG} to ${NEXT_ENV} [skip ci]"
+        git commit -m "chore(release): promote ${TAG} to ${NEXT_ENV}"
 
         REMOTE_URL=$(git remote get-url origin)
         AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GH_TOKEN}@|")
