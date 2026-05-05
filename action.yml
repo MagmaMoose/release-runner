@@ -515,7 +515,7 @@ runs:
           echo "${DRY_RUN_OUTPUT}"
           echo "======================================="
           NEXT_VER=$(echo "${DRY_RUN_OUTPUT}" | \
-            grep -E "The next release version is" | \
+            grep -iE "the next release version is" | \
             grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
           if [ -n "${NEXT_VER}" ]; then
             PRE_NUM=1
