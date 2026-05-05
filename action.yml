@@ -510,7 +510,11 @@ runs:
           # Dry-run to get the next stable version, then manually create the
           # prerelease tag and GitHub Release without touching package.json or
           # CHANGELOG (those are committed on stable promotion).
-          NEXT_VER=$(npx semantic-release --dry-run 2>&1 | \
+          DRY_RUN_OUTPUT=$(npx semantic-release --dry-run 2>&1 || true)
+          echo "=== semantic-release dry-run output ==="
+          echo "${DRY_RUN_OUTPUT}"
+          echo "======================================="
+          NEXT_VER=$(echo "${DRY_RUN_OUTPUT}" | \
             grep -E "The next release version is" | \
             grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
           if [ -n "${NEXT_VER}" ]; then
