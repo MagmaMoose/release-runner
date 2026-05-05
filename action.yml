@@ -573,14 +573,38 @@ runs:
             echo "released=false"             >> "$GITHUB_OUTPUT"
           fi
         else
-          PRE_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          npx semantic-release
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
-          if [ -n "${LATEST_TAG}" ] && [ "${LATEST_TAG}" != "${PRE_TAG}" ]; then
-            echo "released=true"  >> "$GITHUB_OUTPUT"
+          if echo "${HEAD_REF}" | grep -qE "^${PROMOTE_PREFIX}/[^/]+/"; then
+            # Promotion PR for prod: semantic-release refuses on pull_request events.
+            # Extract stable version from branch name and create tag + release manually.
+            # e.g. promote/prod/1.0.0-rc.1 → v1.0.0
+            BRANCH_VERSION=$(echo "${HEAD_REF}" | cut -d'/' -f3)
+            STABLE_VER=$(echo "${BRANCH_VERSION}" | sed 's/-[a-zA-Z][^.]*\.[0-9]*$//')
+            NEW_TAG="${PREFIX}${STABLE_VER}"
+            echo "Stable release: ${NEW_TAG} from promotion branch ${HEAD_REF}"
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "${NEW_TAG}"
+            REMOTE_URL=$(git remote get-url origin)
+            AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GITHUB_TOKEN}@|")
+            git push "${AUTHED_URL}" "${NEW_TAG}"
+            if [ "${{ inputs.create-release }}" == "true" ]; then
+              gh release create "${NEW_TAG}" \
+                --title "${NEW_TAG}" \
+                --generate-notes
+            fi
+            echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
+            echo "released=true"         >> "$GITHUB_OUTPUT"
           else
-            echo "released=false" >> "$GITHUB_OUTPUT"
+            # Direct push or workflow_dispatch: run semantic-release normally.
+            PRE_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            npx semantic-release
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+            if [ -n "${LATEST_TAG}" ] && [ "${LATEST_TAG}" != "${PRE_TAG}" ]; then
+              echo "released=true"  >> "$GITHUB_OUTPUT"
+            else
+              echo "released=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
         fi
 
