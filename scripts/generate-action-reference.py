@@ -55,6 +55,16 @@ INPUT_GROUPS: list[tuple[str, list[str]]] = [
   ("CI checks", [
     "enforce_branch_naming",
   ]),
+  ("Version file injection", [
+    "version-file",
+    "version-file-json-path",
+  ]),
+  ("GitHub Projects integration", [
+    "aggregate-github-projects",
+    "move-github-projects-on-release",
+    "github-projects-target-status",
+    "github-projects-move-on-environments",
+  ]),
   ("GitVersion", [
     "gitversion-spec",
     "gitversion-config",
