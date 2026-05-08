@@ -143,13 +143,16 @@ for NUM in ${REFS}; do
   # we get a single-line value even when the JSON is pretty-printed.
   NODE=$(echo "${RESPONSE}" | jq -c '.data.repository.issue // .data.repository.pullRequest // null')
   if [ "${NODE}" = "null" ] || [ -z "${NODE}" ]; then
+    log "Ref #${NUM}: not an issue or PR (or token can't see it). Skipping."
     continue
   fi
 
   ITEM_COUNT=$(echo "${NODE}" | jq '(.projectItems.nodes // []) | length')
   if [ "${ITEM_COUNT:-0}" -eq 0 ] 2>/dev/null; then
+    log "Ref #${NUM}: ${ITEM_COUNT} project items linked (token may lack project read scope)."
     continue
   fi
+  log "Ref #${NUM}: ${ITEM_COUNT} project item(s) linked."
 
   # Append each project item with the ref's title/URL.
   ENRICHED=$(echo "${NODE}" | jq -c '
