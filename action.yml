@@ -312,6 +312,37 @@ runs:
         DEFAULT_GITHUB_TOKEN: ${{ inputs.github-token || github.token }}
       run: "${GITHUB_ACTION_PATH}/scripts/resolve-auth-token.sh"
 
+    # ── 1b. Manual-release guardrail ────────────────────────────────────────
+    # Restrict workflow_dispatch in release mode to repo admins. Push and
+    # promotion-PR-merge triggers are unaffected. The auth token resolved
+    # above must have Repository: Administration: Read — when using the
+    # public Release Runner App, that permission has to be granted on the
+    # App and accepted on the installation.
+    - name: Repo admin guardrail (manual releases only)
+      if: |
+        inputs.mode == 'release' &&
+        github.event_name == 'workflow_dispatch'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.auth.outputs.token }}
+        OWNER: ${{ github.repository_owner }}
+        REPO: ${{ github.event.repository.name }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        set -euo pipefail
+        PERM=$(gh api "/repos/${OWNER}/${REPO}/collaborators/${ACTOR}/permission" \
+                 --jq '.permission' 2>/dev/null || echo "")
+        if [ -z "${PERM}" ]; then
+          echo "::error::Could not check repo permission for ${ACTOR} on ${OWNER}/${REPO}."
+          echo "::error::The auth token needs Repository: Administration: Read. If you're using auth-mode: public-app, ensure the Release Runner App has that permission and the installation has accepted it."
+          exit 1
+        fi
+        if [ "${PERM}" != "admin" ]; then
+          echo "::error::${ACTOR} is not a repo admin on ${OWNER}/${REPO} (permission=${PERM}). Manual workflow_dispatch in release mode is restricted to admins — merge a promotion PR instead."
+          exit 1
+        fi
+        echo "✓ ${ACTOR} is a repo admin on ${OWNER}/${REPO}"
+
     # ── 2. Checkout ─────────────────────────────────────────────────────────
     - name: Checkout
       uses: actions/checkout@v6
