@@ -213,16 +213,25 @@ inputs:
       to the GitHub Release notes and to any open promotion PR body that
       mentions the tag.
 
-      The auth token must allow:
-        - Repository: Issues / Pull requests: Read
+      The auth token must have:
         - Repository: Contents: Read
-        - Organization: Projects: Read
+        - Repository: Issues: Read
+        - Repository: Pull requests: Read
         - Repository: Releases: Write (to edit release notes)
         - Repository: Pull requests: Write (to edit promotion PR bodies)
-      With auth-mode: public-app, the Release Runner App already covers the
-      first two; you must grant the rest on the App and accept on the
-      installation. With github-token, the workflow GITHUB_TOKEN cannot
-      read org-scoped Projects v2 — supply a PAT with `read:project`.
+        - Organization or User: Projects: Read
+
+      With auth-mode: public-app, the default Release Runner App ships
+      with only the permissions needed for tagging and Releases. Issues,
+      Pull requests, and Projects must be granted on the App settings
+      AND re-accepted on each installation; otherwise the GraphQL probe
+      that finds a ref's Projects v2 membership returns NOT_FOUND for
+      every issue/PR (the script logs "Ref #N: GraphQL returned no
+      node" with the underlying error and skips the ref).
+
+      With auth-mode: github-token, the workflow GITHUB_TOKEN cannot
+      read org-scoped Projects v2 — supply a PAT with `repo` and
+      `read:project` (or fine-grained equivalents).
     required: false
     default: 'false'
 
@@ -239,11 +248,11 @@ inputs:
 
       Skipped silently when the project's Status field has no matching
       option. Works alongside `aggregate-github-projects` — the two are
-      independent toggles.
-
-      The auth token must allow Organization: Projects: Write. With
-      auth-mode: public-app, grant on the Release Runner App. With
-      github-token, supply a PAT with `project` scope.
+      independent toggles, and they need the same Issues + PRs + Projects
+      read scopes (see aggregate-github-projects). For the move itself
+      the token must additionally have Organization or User: Projects:
+      Write. With auth-mode: github-token, supply a PAT with `project`
+      scope (read+write).
     required: false
     default: 'false'
 

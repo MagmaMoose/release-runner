@@ -123,19 +123,25 @@ MOVED=0
 SKIPPED=0
 
 for NUM in ${REFS}; do
+  # See append-github-projects.sh for why we don't use `|| echo "{}"`:
+  # the GraphQL response returns BOTH data and a NOT_FOUND error when the
+  # number is an issue but not a PR (or vice versa). The `||` fallback
+  # would concatenate `{}` onto valid stdout and produce a multi-document
+  # JSON stream that breaks downstream jq.
   RESPONSE=$(gh api graphql \
     -f query="${ITEM_QUERY}" \
     -F owner="${OWNER}" \
     -F repo="${REPO}" \
-    -F number="${NUM}" 2>/dev/null || echo "{}")
+    -F number="${NUM}" 2>/dev/null) || true
+  [ -z "${RESPONSE}" ] && RESPONSE='{}'
 
-  NODE=$(echo "${RESPONSE}" | jq '.data.repository.issue // .data.repository.pullRequest // null')
+  NODE=$(echo "${RESPONSE}" | jq -c '.data.repository.issue // .data.repository.pullRequest // null')
   if [ "${NODE}" = "null" ] || [ -z "${NODE}" ]; then
     continue
   fi
 
-  ITEM_COUNT=$(echo "${NODE}" | jq '.projectItems.nodes | length')
-  if [ "${ITEM_COUNT}" -eq 0 ]; then
+  ITEM_COUNT=$(echo "${NODE}" | jq '(.projectItems.nodes // []) | length')
+  if [ "${ITEM_COUNT:-0}" -eq 0 ] 2>/dev/null; then
     continue
   fi
 
