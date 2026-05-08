@@ -143,16 +143,28 @@ for NUM in ${REFS}; do
   # we get a single-line value even when the JSON is pretty-printed.
   NODE=$(echo "${RESPONSE}" | jq -c '.data.repository.issue // .data.repository.pullRequest // null')
   if [ "${NODE}" = "null" ] || [ -z "${NODE}" ]; then
-    # Surface the GraphQL errors so callers can see whether it's a
-    # missing-scope problem versus the ref genuinely not existing.
+    # No node back from either probe — almost always missing token scope
+    # (Issues / Pull requests: Read) or a ref that doesn't resolve. Surface
+    # as a warning per the file header's "errors logged as workflow
+    # warnings" contract; include the GraphQL errors block so callers can
+    # diagnose without opening the Actions log.
     ERR=$(echo "${RESPONSE}" | jq -c '.errors // empty')
-    log "Ref #${NUM}: GraphQL returned no node. errors=${ERR:-<none>}"
+    warn "Ref #${NUM}: GraphQL returned no node. errors=${ERR:-<none>}"
     continue
   fi
 
   ITEM_COUNT=$(echo "${NODE}" | jq '(.projectItems.nodes // []) | length')
   if [ "${ITEM_COUNT:-0}" -eq 0 ] 2>/dev/null; then
-    log "Ref #${NUM}: ${ITEM_COUNT} project items linked (token may lack project read scope)."
+    # Zero items is a normal state — most issues/PRs aren't on a Project
+    # board. Only flag a likely scope problem when GraphQL also returned
+    # errors for this ref (e.g. Projects: Read missing but Issues: Read
+    # granted).
+    ERR=$(echo "${RESPONSE}" | jq -c '.errors // empty')
+    if [ -n "${ERR}" ]; then
+      warn "Ref #${NUM}: 0 project items, GraphQL also reported errors=${ERR} (likely missing Projects: Read)."
+    else
+      log "Ref #${NUM}: 0 project items linked."
+    fi
     continue
   fi
   log "Ref #${NUM}: ${ITEM_COUNT} project item(s) linked."
