@@ -92,6 +92,26 @@ For semantic-release-python: pyproject.toml
 For semantic-release-npm:    .releaserc.json / package.json
 For gitversion:              GitVersion.yml
 
+#### `force-bump`
+
+- Required: `false`
+- Default: `''`
+
+Force a specific version bump instead of letting the versioning tool
+decide from commit messages. Designed for `workflow_dispatch` runs
+where there are no qualifying conventional commits since the last
+release but you still want to cut a new version (the typical
+"no_release / Released: false" outcome).
+
+Allowed values:
+
+| Value | Description |
+|---|---|
+| `patch` | Force a patch bump (e.g. 1.2.3 → 1.2.4). |
+| `minor` | Force a minor bump (e.g. 1.2.3 → 1.3.0). |
+| `major` | Force a major bump (e.g. 1.2.3 → 2.0.0). |
+| `''` | (default) Let the versioning tool decide. Honoured by: - semantic-release-python: passed as the upstream `force` input. - gitversion: passed as `/overrideconfig increment=Major|Minor|Patch`. Ignored by semantic-release-npm and release-please — those tools have no clean equivalent and a forced bump would conflict with the tool's own logic. Wire your `workflow_dispatch` `bump` input to this input from the caller workflow. |
+
 ### Deployment model
 
 #### `deployment-model`
@@ -112,9 +132,21 @@ Controls how the target environment is determined. One of:
 - Required: `false`
 - Default: `''`
 
-JSON object mapping branch names to environment names.
-Only used when deployment-model is bbd.
-Example: {"dev": "dev", "staging": "staging", "main": "prod"}
+JSON object mapping branch names to environment names. Only used when
+deployment-model is bbd.
+
+Plain BBD (one branch per environment):
+  {"dev": "dev", "staging": "staging", "main": "prod"}
+
+Strict GitFlow (release/* and hotfix/* are dynamic branch families).
+Keys containing `*` are treated as globs — they match any segment up
+to the next slash boundary the same way shell globs do, anchored at
+both ends:
+  {"develop": "dev", "release/*": "staging", "hotfix/*": "prod", "main": "prod"}
+
+Exact matches always win over globs. When two globs both match, the
+one with the longer key wins, so a specific pattern like
+`release/hotfix/*` beats `release/*`.
 
 #### `promote-branch-prefix`
 
@@ -246,6 +278,113 @@ Enforce TBD branch naming convention on PRs (mode: ci).
 Allowed prefixes: feat, fix, chore, hotfix, docs, refactor, perf, test, ci, style.
 Set to false for BBD (branches are named after environments).
 
+### Version file injection
+
+#### `version-file`
+
+- Required: `false`
+- Default: `''`
+
+Path to a JSON file where the released version is injected and committed
+back to the branch after every release. Works with every versioning
+tool, not just GitVersion. Typical use: persist the version into
+`appsettings.json` for a .NET app so the running container can display
+its own version.
+
+JSON only — the injection step uses `jq`. YAML targets (e.g. Helm
+`Chart.yaml`) aren't supported today; if `jq` errors on the file
+the step warns and skips so a mis-configured file does not block
+the release.
+
+The commit uses the resolved release auth token (Release Runner App,
+private app, or `github-token`), so it can bypass branch-protection
+rulesets when the App is in the bypass list. The commit message ends
+with `[skip ci]` so the push does not retrigger the release workflow.
+
+Leave empty to disable. The file must exist or the step is skipped
+with a warning.
+
+#### `version-file-json-path`
+
+- Required: `false`
+- Default: `.Application.Version`
+
+jq path for the version field inside `version-file`. Only used when
+`version-file` is set. Example: `.Application.Version`
+
+### GitHub Projects integration
+
+#### `aggregate-github-projects`
+
+- Required: `false`
+- Default: `false`
+
+When true, after a release is created, walk the commits in the release
+range and the bodies of any PRs landed in that range, collect issue
+and PR references (#NNN), look up their Projects v2 membership via
+the GitHub GraphQL API, and append a "## GitHub Project items"
+section (grouped by Project, with the item's Status when available)
+to the GitHub Release notes and to any open promotion PR body that
+mentions the tag.
+
+The auth token must allow:
+  - Repository: Issues / Pull requests: Read
+  - Repository: Contents: Read
+  - Organization: Projects: Read
+  - Repository: Releases: Write (to edit release notes)
+  - Repository: Pull requests: Write (to edit promotion PR bodies)
+With auth-mode: public-app, the Release Runner App already covers the
+first two; you must grant the rest on the App and accept on the
+installation. With github-token, the workflow GITHUB_TOKEN cannot
+read org-scoped Projects v2 — supply a PAT with `read:project`.
+
+#### `move-github-projects-on-release`
+
+- Required: `false`
+- Default: `false`
+
+When true, after a release is created, move every Projects v2 item
+linked to issues/PRs in the release range to a target Status.
+Intended for closing the loop on releases — e.g. moving "In review"
+cards to "Released" when the prod tag is cut.
+
+Set `github-projects-target-status` to the Status value to move to
+(must already exist on the Project). The status move is opt-in
+because not every project board has a "Released" column.
+
+Skipped silently when the project's Status field has no matching
+option. Works alongside `aggregate-github-projects` — the two are
+independent toggles.
+
+The auth token must allow Organization: Projects: Write. With
+auth-mode: public-app, grant on the Release Runner App. With
+github-token, supply a PAT with `project` scope.
+
+#### `github-projects-target-status`
+
+- Required: `false`
+- Default: `Released`
+
+Target Status name for `move-github-projects-on-release`. Must match
+an existing single-select option on each project's Status field.
+Common values: 'Released', 'Done', 'Shipped'.
+
+#### `github-projects-move-on-environments`
+
+- Required: `false`
+- Default: `@last`
+
+JSON array of environments where the auto-move should fire. Defaults
+to the production environment only (last entry of `environments`),
+so prereleases don't prematurely mark items released.
+
+Special values:
+
+| Value | Description |
+|---|---|
+| `'@last'` | (default) Resolve at runtime to the last entry of `environments`. Production-by-default in any naming. |
+| `'[]'` | Move on every environment. Or a literal JSON array of environment names, e.g. '["staging","prod"]'. |
+
 ### Guardrails
 
 #### `admin-required-from`
@@ -308,17 +447,16 @@ Path to GitVersion.yml. Only used when versioning-tool is gitversion.
 - Required: `false`
 - Default: `''`
 
-Path to a JSON file (e.g., appsettings.json) where the version is injected
-and committed back to the branch. Only used when versioning-tool is gitversion.
+DEPRECATED — use `version-file` instead. Retained for backwards
+compatibility. When both are set, `version-file` wins.
 
 #### `gitversion-appsettings-version-path`
 
 - Required: `false`
-- Default: `.Application.Version`
+- Default: `''`
 
-jq path for the version field in the appsettings file.
-Only used when gitversion-appsettings-file is set.
-Example: .Application.Version
+DEPRECATED — use `version-file-json-path` instead. Retained for
+backwards compatibility.
 
 ### release-please
 

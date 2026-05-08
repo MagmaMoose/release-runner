@@ -20,5 +20,6 @@ nav:
       - Organization: organization-setup.md
       - Choose your setup: choose-your-setup.md
       - Repository: repository-setup.md
+  - Branching strategies: branching-strategies.md
   - Reference:
       - Action inputs and outputs: reference/action-inputs-outputs.md
