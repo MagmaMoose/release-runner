@@ -246,6 +246,47 @@ Enforce TBD branch naming convention on PRs (mode: ci).
 Allowed prefixes: feat, fix, chore, hotfix, docs, refactor, perf, test, ci, style.
 Set to false for BBD (branches are named after environments).
 
+### Guardrails
+
+#### `admin-required-from`
+
+- Required: `false`
+- Default: `@last`
+
+Threshold environment for the manual-release guardrail. Manual
+workflow_dispatch runs whose target environment is at or after this
+threshold (in the `environments` list) require the actor to have
+`permission: admin` on the repository. Push and promotion-PR-merge
+triggers are unaffected.
+
+Special values:
+
+| Value | Description |
+|---|---|
+| `'@last'` | (default) Use the last entry in `environments`. With the default environments=["dev","staging","prod"] this protects prod only; with environments=["dev","tst","acc","prd"] it protects prd only. The point is to give every consumer production protection out of the box without needing to know the literal env name. |
+| `''` | Opt out. No manual-release guardrail. Or set to a specific environment name (must appear in `environments`) to gate that env and everything downstream. Examples (environments = ["dev","staging","prod"]): |
+| `'@last'` | → only prod releases require admin (default) |
+| `prod` | → only prod releases require admin |
+| `staging` | → staging and prod require admin |
+| `dev` | → all envs require admin |
+| `''` | → no guardrail The auth token must allow Repository: Administration: Read. With auth-mode: public-app, grant the permission on the Release Runner App and accept it on the installation. |
+
+### Integrations
+
+#### `aggregate-clickup-tickets`
+
+- Required: `false`
+- Default: `false`
+
+When true, after a release is created scan the commits in the release
+range and the descriptions of PRs that landed in that range for ClickUp
+ticket URLs (https://app.clickup.com/t/...). Any matches are appended
+as a "## ClickUp tickets" section to the GitHub Release notes and to
+the auto-opened promotion PR body when one exists.
+
+The auth token must allow editing release notes and PR bodies. With
+auth-mode: public-app this is already covered by the Release Runner App.
+
 ### GitVersion
 
 #### `gitversion-spec`
@@ -294,6 +335,18 @@ release-please release type (python, node, simple, go, etc.).
 - Default: `release-please-config.json`
 
 Path to release-please-config.json.
+
+### Other
+
+#### `build-github-token`
+
+- Required: `false`
+- Default: `''`
+
+Optional token passed as --secret id=github_token to docker buildx bake.
+Use when Dockerfiles use --mount=type=secret,id=github_token to pull
+private packages (e.g. GitHub Packages).
+Pass secrets.NPM_TOKEN or secrets.GITHUB_TOKEN from the calling workflow.
 
 ## Outputs
 

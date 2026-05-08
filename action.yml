@@ -190,6 +190,40 @@ inputs:
     required: false
     default: 'true'
 
+  # ── Guardrails ────────────────────────────────────────────────────────────
+  admin-required-from:
+    description: |
+      Threshold environment for the manual-release guardrail. Manual
+      workflow_dispatch runs whose target environment is at or after this
+      threshold (in the `environments` list) require the actor to have
+      `permission: admin` on the repository. Push and promotion-PR-merge
+      triggers are unaffected.
+
+      Special values:
+        '@last'   (default) Use the last entry in `environments`. With the
+                  default environments=["dev","staging","prod"] this protects
+                  prod only; with environments=["dev","tst","acc","prd"] it
+                  protects prd only. The point is to give every consumer
+                  production protection out of the box without needing to
+                  know the literal env name.
+        ''        Opt out. No manual-release guardrail.
+
+      Or set to a specific environment name (must appear in `environments`)
+      to gate that env and everything downstream.
+
+      Examples (environments = ["dev","staging","prod"]):
+        '@last'   → only prod releases require admin (default)
+        prod      → only prod releases require admin
+        staging   → staging and prod require admin
+        dev       → all envs require admin
+        ''        → no guardrail
+
+      The auth token must allow Repository: Administration: Read. With
+      auth-mode: public-app, grant the permission on the Release Runner App
+      and accept it on the installation.
+    required: false
+    default: '@last'
+
   # ── Common release options ────────────────────────────────────────────────
   working-directory:
     description: |
@@ -209,6 +243,20 @@ inputs:
     description: 'Generate/update CHANGELOG.md (semantic-release-python and semantic-release-npm).'
     required: false
     default: 'true'
+
+  # ── Integrations ──────────────────────────────────────────────────────────
+  aggregate-clickup-tickets:
+    description: |
+      When true, after a release is created scan the commits in the release
+      range and the descriptions of PRs that landed in that range for ClickUp
+      ticket URLs (https://app.clickup.com/t/...). Any matches are appended
+      as a "## ClickUp tickets" section to the GitHub Release notes and to
+      the auto-opened promotion PR body when one exists.
+
+      The auth token must allow editing release notes and PR bodies. With
+      auth-mode: public-app this is already covered by the Release Runner App.
+    required: false
+    default: 'false'
 
   # ── GitVersion-specific ───────────────────────────────────────────────────
   gitversion-spec:
@@ -458,6 +506,77 @@ runs:
         fi
 
         echo "environment=${ENV}" >> "$GITHUB_OUTPUT"
+
+    # ── Manual-release guardrail (release mode only) ───────────────────────
+    # Restrict manual workflow_dispatch runs to repo admins, scoped to a
+    # threshold environment and everything downstream of it (later in
+    # `environments`). The threshold defaults to `@last`, which resolves to
+    # the production environment in any naming scheme — so production is
+    # protected by default for both TBD and BBD callers.
+    #
+    # Push and promotion-PR-merge triggers are unaffected. The auth token
+    # needs Repository: Administration: Read.
+    - name: Repo admin guardrail (manual releases only)
+      if: |
+        inputs.mode == 'release' &&
+        github.event_name == 'workflow_dispatch' &&
+        inputs.admin-required-from != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.auth.outputs.token }}
+        OWNER: ${{ github.repository_owner }}
+        REPO: ${{ github.event.repository.name }}
+        ACTOR: ${{ github.actor }}
+        RAW_THRESHOLD: ${{ inputs.admin-required-from }}
+        CURRENT_ENV: ${{ steps.detect-env.outputs.environment }}
+        ENVIRONMENTS: ${{ inputs.environments }}
+      run: |
+        set -euo pipefail
+
+        # Resolve magic threshold values (currently only '@last').
+        if [ "${RAW_THRESHOLD}" = "@last" ]; then
+          THRESHOLD=$(echo "${ENVIRONMENTS}" | jq -r '.[-1] // empty')
+          if [ -z "${THRESHOLD}" ]; then
+            echo "::error::admin-required-from='@last' but environments is empty."
+            exit 1
+          fi
+          echo "Threshold '@last' resolved to '${THRESHOLD}' (last entry of ${ENVIRONMENTS})."
+        else
+          THRESHOLD="${RAW_THRESHOLD}"
+        fi
+
+        THRESHOLD_IDX=$(echo "${ENVIRONMENTS}" | jq -r --arg e "${THRESHOLD}" 'index($e) // empty')
+        if [ -z "${THRESHOLD_IDX}" ]; then
+          echo "::error::admin-required-from='${THRESHOLD}' is not in environments=${ENVIRONMENTS}."
+          exit 1
+        fi
+        if [ -z "${CURRENT_ENV}" ]; then
+          echo "::error::Could not resolve current environment for the run."
+          exit 1
+        fi
+        CURRENT_IDX=$(echo "${ENVIRONMENTS}" | jq -r --arg e "${CURRENT_ENV}" 'index($e) // empty')
+        if [ -z "${CURRENT_IDX}" ]; then
+          echo "::error::Resolved environment '${CURRENT_ENV}' is not in environments=${ENVIRONMENTS}."
+          exit 1
+        fi
+
+        if [ "${CURRENT_IDX}" -lt "${THRESHOLD_IDX}" ]; then
+          echo "Current env '${CURRENT_ENV}' is upstream of threshold '${THRESHOLD}' — guardrail not applied."
+          exit 0
+        fi
+
+        PERM=$(gh api "/repos/${OWNER}/${REPO}/collaborators/${ACTOR}/permission" \
+                 --jq '.permission' 2>/dev/null || echo "")
+        if [ -z "${PERM}" ]; then
+          echo "::error::Could not check repo permission for ${ACTOR} on ${OWNER}/${REPO}."
+          echo "::error::The auth token needs Repository: Administration: Read. With auth-mode: public-app, grant that permission on the Release Runner App and accept it on the installation. To opt out of this guardrail, set admin-required-from: ''."
+          exit 1
+        fi
+        if [ "${PERM}" != "admin" ]; then
+          echo "::error::${ACTOR} is not a repo admin on ${OWNER}/${REPO} (permission=${PERM}). Manual releases to '${CURRENT_ENV}' require admin (threshold: '${THRESHOLD}'); merge a promotion PR instead."
+          exit 1
+        fi
+        echo "✓ ${ACTOR} is a repo admin on ${OWNER}/${REPO} — manual release to '${CURRENT_ENV}' allowed."
 
     - name: Run python-semantic-release
       id: psr
@@ -965,3 +1084,21 @@ runs:
           --base "${TARGET}" \
           --head "${BRANCH}") || { echo "::warning::PR already exists for ${BRANCH}"; exit 0; }
         gh pr edit "${PR_URL}" --add-label "promotion" 2>/dev/null || true
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # RELEASE MODE — ClickUp ticket aggregation (opt-in)
+    # ═════════════════════════════════════════════════════════════════════════
+
+    - name: Append ClickUp tickets to release docs
+      if: |
+        inputs.mode == 'release' &&
+        inputs.aggregate-clickup-tickets == 'true' &&
+        steps.normalize.outputs.released == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.auth.outputs.token }}
+        OWNER: ${{ github.repository_owner }}
+        REPO: ${{ github.event.repository.name }}
+        TAG: ${{ steps.normalize.outputs.tag }}
+        PRERELEASE_IDENTIFIER: ${{ steps.detect-env.outputs.prerelease_identifier }}
+      run: "${GITHUB_ACTION_PATH}/scripts/append-clickup-tickets.sh"

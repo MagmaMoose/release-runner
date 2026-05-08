@@ -55,6 +55,12 @@ INPUT_GROUPS: list[tuple[str, list[str]]] = [
   ("CI checks", [
     "enforce_branch_naming",
   ]),
+  ("Guardrails", [
+    "admin-required-from",
+  ]),
+  ("Integrations", [
+    "aggregate-clickup-tickets",
+  ]),
   ("GitVersion", [
     "gitversion-spec",
     "gitversion-config",
