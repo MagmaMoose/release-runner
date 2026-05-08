@@ -43,6 +43,36 @@ The bundled semantic-release and release-please examples use
 If you use GitVersion, the branch rules in `GitVersion.yml` control the version
 increment.
 
+### Forcing A Bump
+
+Set `force-bump` to `patch`, `minor`, or `major` to override the tool's
+own decision. Useful from `workflow_dispatch` when no qualifying
+conventional commits exist since the last release but you still want
+to cut a new version — the typical "no_release / Released: false"
+outcome.
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        type: choice
+        options: ['', patch, minor, major]
+        default: ''
+
+jobs:
+  release:
+    steps:
+      - uses: calebsargeant/semantic-release@v1
+        with:
+          force-bump: ${{ github.event.inputs.bump }}
+```
+
+Honoured by `semantic-release-python` (forwarded as the upstream
+`force` input) and `gitversion` (passed as `/overrideconfig
+increment=Major|Minor|Patch`). Ignored by `semantic-release-npm` and
+`release-please` — those tools have no clean equivalent.
+
 ## Release Models
 
 Release Runner supports two release models.

@@ -92,6 +92,26 @@ For semantic-release-python: pyproject.toml
 For semantic-release-npm:    .releaserc.json / package.json
 For gitversion:              GitVersion.yml
 
+#### `force-bump`
+
+- Required: `false`
+- Default: `''`
+
+Force a specific version bump instead of letting the versioning tool
+decide from commit messages. Designed for `workflow_dispatch` runs
+where there are no qualifying conventional commits since the last
+release but you still want to cut a new version (the typical
+"no_release / Released: false" outcome).
+
+Allowed values:
+
+| Value | Description |
+|---|---|
+| `patch` | Force a patch bump (e.g. 1.2.3 → 1.2.4). |
+| `minor` | Force a minor bump (e.g. 1.2.3 → 1.3.0). |
+| `major` | Force a major bump (e.g. 1.2.3 → 2.0.0). |
+| `''` | (default) Let the versioning tool decide. Honoured by: - semantic-release-python: passed as the upstream `force` input. - gitversion: passed as `/overrideconfig increment=Major|Minor|Patch`. Ignored by semantic-release-npm and release-please — those tools have no clean equivalent and a forced bump would conflict with the tool's own logic. Wire your `workflow_dispatch` `bump` input to this input from the caller workflow. |
+
 ### Deployment model
 
 #### `deployment-model`
