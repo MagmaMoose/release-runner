@@ -126,25 +126,33 @@ trap 'rm -f "${TMP_REFS}" "${AGGREGATE}"' EXIT
 echo "[]" > "${AGGREGATE}"
 
 for NUM in ${REFS}; do
+  # Capture stdout cleanly. The GraphQL endpoint returns BOTH the data and
+  # a NOT_FOUND error when one of the issue/pullRequest probes for a number
+  # that exists as the other type — gh exits non-zero in that case but the
+  # data is still present in the JSON payload. Don't use `|| echo "{}"` —
+  # that concatenates the fallback onto the real JSON, producing a
+  # multi-document stream that breaks downstream jq calls.
   RESPONSE=$(gh api graphql \
     -f query="${QUERY}" \
     -F owner="${OWNER}" \
     -F repo="${REPO}" \
-    -F number="${NUM}" 2>/dev/null || echo "{}")
+    -F number="${NUM}" 2>/dev/null) || true
+  [ -z "${RESPONSE}" ] && RESPONSE='{}'
 
-  # Pick whichever node returned non-null (issue or pullRequest).
-  NODE=$(echo "${RESPONSE}" | jq '.data.repository.issue // .data.repository.pullRequest // null')
+  # Pick whichever node returned non-null (issue or pullRequest). `-c` so
+  # we get a single-line value even when the JSON is pretty-printed.
+  NODE=$(echo "${RESPONSE}" | jq -c '.data.repository.issue // .data.repository.pullRequest // null')
   if [ "${NODE}" = "null" ] || [ -z "${NODE}" ]; then
     continue
   fi
 
-  ITEM_COUNT=$(echo "${NODE}" | jq '.projectItems.nodes | length')
-  if [ "${ITEM_COUNT}" -eq 0 ]; then
+  ITEM_COUNT=$(echo "${NODE}" | jq '(.projectItems.nodes // []) | length')
+  if [ "${ITEM_COUNT:-0}" -eq 0 ] 2>/dev/null; then
     continue
   fi
 
   # Append each project item with the ref's title/URL.
-  ENRICHED=$(echo "${NODE}" | jq '
+  ENRICHED=$(echo "${NODE}" | jq -c '
     .projectItems.nodes
     | map({
         project: .project,
