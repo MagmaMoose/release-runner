@@ -251,21 +251,25 @@ Set to false for BBD (branches are named after environments).
 #### `admin-required-from`
 
 - Required: `false`
-- Default: `''`
+- Default: `@last`
 
-Threshold environment for the manual-release guardrail. When non-empty,
-manual workflow_dispatch runs whose target environment is at or after
-this threshold (in the `environments` list) require the actor to have
-`permission: admin` on the repository.
+Threshold environment for the manual-release guardrail. Manual
+workflow_dispatch runs whose target environment is at or after this
+threshold (in the `environments` list) require the actor to have
+`permission: admin` on the repository. Push and promotion-PR-merge
+triggers are unaffected.
 
-Examples (with environments = ["dev","staging","prod"]):
+Special values:
 
 | Value | Description |
 |---|---|
-| `''` | → no enforcement (default) |
+| `'@last'` | (default) Use the last entry in `environments`. With the default environments=["dev","staging","prod"] this protects prod only; with environments=["dev","tst","acc","prd"] it protects prd only. The point is to give every consumer production protection out of the box without needing to know the literal env name. |
+| `''` | Opt out. No manual-release guardrail. Or set to a specific environment name (must appear in `environments`) to gate that env and everything downstream. Examples (environments = ["dev","staging","prod"]): |
+| `'@last'` | → only prod releases require admin (default) |
 | `prod` | → only prod releases require admin |
 | `staging` | → staging and prod require admin |
-| `dev` | → all envs require admin The auth token must allow Repository: Administration: Read. With auth-mode: public-app, grant the permission on the Release Runner App and accept it on the installation. |
+| `dev` | → all envs require admin |
+| `''` | → no guardrail The auth token must allow Repository: Administration: Read. With auth-mode: public-app, grant the permission on the Release Runner App and accept it on the installation. |
 
 ### Integrations
 
