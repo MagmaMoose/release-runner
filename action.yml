@@ -210,6 +210,20 @@ inputs:
     required: false
     default: 'true'
 
+  # ── Integrations ──────────────────────────────────────────────────────────
+  aggregate-clickup-tickets:
+    description: |
+      When true, after a release is created scan the commits in the release
+      range and the descriptions of PRs that landed in that range for ClickUp
+      ticket URLs (https://app.clickup.com/t/...). Any matches are appended
+      as a "## ClickUp tickets" section to the GitHub Release notes and to
+      the auto-opened promotion PR body when one exists.
+
+      The auth token must allow editing release notes and PR bodies. With
+      auth-mode: public-app this is already covered by the Release Runner App.
+    required: false
+    default: 'false'
+
   # ── GitVersion-specific ───────────────────────────────────────────────────
   gitversion-spec:
     description: 'GitVersion version spec (e.g., 6.x). Only used when versioning-tool is gitversion.'
@@ -996,3 +1010,21 @@ runs:
           --base "${TARGET}" \
           --head "${BRANCH}") || { echo "::warning::PR already exists for ${BRANCH}"; exit 0; }
         gh pr edit "${PR_URL}" --add-label "promotion" 2>/dev/null || true
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # RELEASE MODE — ClickUp ticket aggregation (opt-in)
+    # ═════════════════════════════════════════════════════════════════════════
+
+    - name: Append ClickUp tickets to release docs
+      if: |
+        inputs.mode == 'release' &&
+        inputs.aggregate-clickup-tickets == 'true' &&
+        steps.normalize.outputs.released == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.auth.outputs.token }}
+        OWNER: ${{ github.repository_owner }}
+        REPO: ${{ github.event.repository.name }}
+        TAG: ${{ steps.normalize.outputs.tag }}
+        PRERELEASE_IDENTIFIER: ${{ steps.detect-env.outputs.prerelease_identifier }}
+      run: "${GITHUB_ACTION_PATH}/scripts/append-clickup-tickets.sh"

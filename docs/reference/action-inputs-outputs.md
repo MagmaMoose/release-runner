@@ -246,6 +246,22 @@ Enforce TBD branch naming convention on PRs (mode: ci).
 Allowed prefixes: feat, fix, chore, hotfix, docs, refactor, perf, test, ci, style.
 Set to false for BBD (branches are named after environments).
 
+### Integrations
+
+#### `aggregate-clickup-tickets`
+
+- Required: `false`
+- Default: `false`
+
+When true, after a release is created scan the commits in the release
+range and the descriptions of PRs that landed in that range for ClickUp
+ticket URLs (https://app.clickup.com/t/...). Any matches are appended
+as a "## ClickUp tickets" section to the GitHub Release notes and to
+the auto-opened promotion PR body when one exists.
+
+The auth token must allow editing release notes and PR bodies. With
+auth-mode: public-app this is already covered by the Release Runner App.
+
 ### GitVersion
 
 #### `gitversion-spec`
@@ -294,6 +310,18 @@ release-please release type (python, node, simple, go, etc.).
 - Default: `release-please-config.json`
 
 Path to release-please-config.json.
+
+### Other
+
+#### `build-github-token`
+
+- Required: `false`
+- Default: `''`
+
+Optional token passed as --secret id=github_token to docker buildx bake.
+Use when Dockerfiles use --mount=type=secret,id=github_token to pull
+private packages (e.g. GitHub Packages).
+Pass secrets.NPM_TOKEN or secrets.GITHUB_TOKEN from the calling workflow.
 
 ## Outputs
 

@@ -146,3 +146,32 @@ Most repositories should use the default `auth-mode: public-app`, which uses
 the Release Runner GitHub App. Use `auth-mode: github-token` only when
 `GITHUB_TOKEN` is allowed to perform the required writes. Use
 `auth-mode: private-app` when your organization owns the GitHub App.
+
+## Manual-Release Guardrail
+
+Manual `workflow_dispatch` runs in `mode: release` are restricted to repo
+admins. The action calls `GET /repos/{owner}/{repo}/collaborators/{user}/permission`
+with the resolved auth token; only `permission == admin` proceeds. Push and
+promotion-PR-merge triggers are unaffected — only manual triggers go through
+this gate.
+
+For this to work, the auth token needs `Repository: Administration: Read`. With
+`auth-mode: public-app` (the default), grant that permission on the Release
+Runner App and accept the new permission on each consuming installation.
+
+## ClickUp Integration
+
+ClickUp's native GitHub integration runs the other direction: GitHub events
+flow into ClickUp tasks. Release Runner adds the missing reverse direction:
+when `aggregate-clickup-tickets` is `true`, after a release is published the
+action scans the commits in the release range and the bodies of any PRs
+referenced from those commits for `https://app.clickup.com/t/...` URLs. Any
+matches are appended as a `## ClickUp tickets` section to the GitHub Release
+notes and to the auto-opened promotion PR body when one exists.
+
+Developers do not need to change how they work — as long as ClickUp links
+land in PR descriptions or commit bodies, every release downstream surfaces
+them automatically.
+
+If no ClickUp links appear in the range, the step logs that and exits
+quietly. Errors editing the release notes never fail the release.
