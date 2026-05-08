@@ -143,7 +143,10 @@ for NUM in ${REFS}; do
   # we get a single-line value even when the JSON is pretty-printed.
   NODE=$(echo "${RESPONSE}" | jq -c '.data.repository.issue // .data.repository.pullRequest // null')
   if [ "${NODE}" = "null" ] || [ -z "${NODE}" ]; then
-    log "Ref #${NUM}: not an issue or PR (or token can't see it). Skipping."
+    # Surface the GraphQL errors so callers can see whether it's a
+    # missing-scope problem versus the ref genuinely not existing.
+    ERR=$(echo "${RESPONSE}" | jq -c '.errors // empty')
+    log "Ref #${NUM}: GraphQL returned no node. errors=${ERR:-<none>}"
     continue
   fi
 
