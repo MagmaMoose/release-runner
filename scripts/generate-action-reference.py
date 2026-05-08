@@ -64,6 +64,11 @@ INPUT_GROUPS: list[tuple[str, list[str]]] = [
     "move-github-projects-on-release",
     "github-projects-target-status",
     "github-projects-move-on-environments",
+  ("Guardrails", [
+    "admin-required-from",
+  ]),
+  ("Integrations", [
+    "aggregate-clickup-tickets",
   ]),
   ("GitVersion", [
     "gitversion-spec",

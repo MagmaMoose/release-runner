@@ -197,3 +197,79 @@ Most repositories should use the default `auth-mode: public-app`, which uses
 the Release Runner GitHub App. Use `auth-mode: github-token` only when
 `GITHUB_TOKEN` is allowed to perform the required writes. Use
 `auth-mode: private-app` when your organization owns the GitHub App.
+
+## Manual-Release Guardrail
+
+Manual `workflow_dispatch` runs in `mode: release` can be restricted to repo
+admins, scoped to a threshold environment and everything downstream of it in
+`environments`. Push and promotion-PR-merge triggers are unaffected — only
+`workflow_dispatch` goes through this gate.
+
+The check runs after the action has resolved which environment this run is
+targeting. For TBD callers that's `inputs.environment`; for BBD callers it's
+the env mapped from the branch via `branch-map`. The action then calls
+`GET /repos/{owner}/{repo}/collaborators/{user}/permission` and only
+`permission == admin` proceeds.
+
+### Default: production is protected
+
+`admin-required-from` defaults to **`@last`**, which resolves at runtime to
+the last entry of `environments`. With every common naming scheme — `prod`,
+`prd`, `production`, `live` — the production environment ends up gated
+without the caller having to repeat the literal name. This applies in both
+TBD and BBD modes.
+
+Production protection by default means an out-of-the-box install of this
+action does not let a non-admin force a production release, regardless of
+naming. To make this work, the auth token needs
+`Repository: Administration: Read`. With `auth-mode: public-app` (the
+default), grant that permission on the Release Runner App and accept it on
+each consuming installation. If the auth token can't read the permission,
+the run fails loudly with a pointer to this section.
+
+### Tightening or relaxing the threshold
+
+| `admin-required-from` | Behaviour with `environments = ["dev","staging","prod"]` |
+|---|---|
+| `'@last'` (default) | Only manual prod releases require admin. |
+| `prod` | Same as `@last` here — only prod. |
+| `staging` | Manual staging and prod releases require admin. |
+| `dev` | All manual releases require admin. |
+| `''` | **No enforcement** — anyone with workflow access can manually release any environment. Use only when you have other gates (e.g. environment protection rules with required reviewers). |
+
+The same threshold semantics apply to any environment list — for example
+`["dev","tst","acc","prd"]` with `admin-required-from: acc` gates `acc` and
+`prd`.
+
+### TBD vs BBD
+
+In **TBD** the env is whatever the caller picked from the
+`workflow_dispatch` dropdown.
+
+In **BBD** the env is the one `branch-map` maps the branch to (the
+`workflow_dispatch` UI's "Use workflow from" dropdown picks the branch).
+Branch-map authors should put the production env last in `environments` so
+`@last` resolves correctly — that's already the convention this action
+documents, and the version-decision logic relies on the same ordering.
+
+> Default-on protection means upgrading to a version of the action that ships
+> this guardrail will start failing manual prod releases for non-admin actors.
+> Either grant the actor admin, mint the auth token from a source that has
+> `Administration: Read`, or set `admin-required-from: ''` to opt out.
+
+## ClickUp Integration
+
+ClickUp's native GitHub integration runs the other direction: GitHub events
+flow into ClickUp tasks. Release Runner adds the missing reverse direction:
+when `aggregate-clickup-tickets` is `true`, after a release is published the
+action scans the commits in the release range and the bodies of any PRs
+referenced from those commits for `https://app.clickup.com/t/...` URLs. Any
+matches are appended as a `## ClickUp tickets` section to the GitHub Release
+notes and to the auto-opened promotion PR body when one exists.
+
+Developers do not need to change how they work — as long as ClickUp links
+land in PR descriptions or commit bodies, every release downstream surfaces
+them automatically.
+
+If no ClickUp links appear in the range, the step logs that and exits
+quietly. Errors editing the release notes never fail the release.
