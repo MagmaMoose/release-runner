@@ -88,8 +88,8 @@ with:
 
 ## Branch-Based Development
 
-Pink Roccade flavour. Long-lived branches *are* the environments. Code
-moves through environments by merging from one branch to the next:
+Long-lived branches *are* the environments. Code moves through
+environments by merging from one branch to the next:
 
 ```text
 develop  ──●──●──●──●──●──→  (dev)
