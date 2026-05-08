@@ -58,6 +58,9 @@ log "Resolving refs in ${COMMIT_RANGE}."
 TMP_REFS=$(mktemp)
 trap 'rm -f "${TMP_REFS}"' EXIT
 
+# Same collection logic as append-github-projects.sh:
+#   1. #NNN refs in commit messages
+#   2. PRs landed in the range, plus #NNN refs in their bodies
 git log --pretty=format:'%B' "${COMMIT_RANGE}" 2>/dev/null \
   | grep -oE '#[0-9]+' \
   | tr -d '#' \
@@ -70,6 +73,11 @@ for SHA in ${COMMIT_SHAS}; do
     --jq '.[].number' 2>/dev/null || true)
   for PR in ${PR_NUMS}; do
     echo "${PR}" >> "${TMP_REFS}"
+    PR_BODY=$(gh api "repos/${OWNER}/${REPO}/pulls/${PR}" --jq '.body // ""' 2>/dev/null || echo "")
+    echo "${PR_BODY}" \
+      | grep -oE '#[0-9]+' \
+      | tr -d '#' \
+      >> "${TMP_REFS}" || true
   done
 done
 
@@ -113,7 +121,6 @@ fragment Item on ProjectV2Item {
 
 MOVED=0
 SKIPPED=0
-declare -A CACHED_OPTION_IDS
 
 for NUM in ${REFS}; do
   RESPONSE=$(gh api graphql \
@@ -132,7 +139,11 @@ for NUM in ${REFS}; do
     continue
   fi
 
-  echo "${NODE}" | jq -c '.projectItems.nodes[]' | while read -r ITEM; do
+  # Process substitution keeps the loop in the parent shell so MOVED /
+  # SKIPPED increments survive past the loop body. (`echo ... | while`
+  # would put the loop in a subshell and the counters would always
+  # report 0 in the final summary.)
+  while read -r ITEM; do
     PROJECT_ID=$(echo "${ITEM}" | jq -r '.project.id')
     PROJECT_TITLE=$(echo "${ITEM}" | jq -r '.project.title')
     ITEM_ID=$(echo "${ITEM}" | jq -r '.id')
@@ -168,7 +179,7 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
       warn "Failed to move #${NUM} on '${PROJECT_TITLE}' — token missing 'Projects: Write'?"
       SKIPPED=$((SKIPPED + 1))
     fi
-  done
+  done < <(echo "${NODE}" | jq -c '.projectItems.nodes[]')
 done
 
 log "Done. Moved=${MOVED}, Skipped=${SKIPPED}."
