@@ -367,7 +367,7 @@ Common values: 'Released', 'Done', 'Shipped'.
 #### `github-projects-move-on-environments`
 
 - Required: `false`
-- Default: _Not set._
+- Default: `@last`
 
 JSON array of environments where the auto-move should fire. Defaults
 to the production environment only (last entry of `environments`),

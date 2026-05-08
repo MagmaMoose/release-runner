@@ -267,6 +267,9 @@ inputs:
         '[]'      Move on every environment.
 
       Or a literal JSON array of environment names, e.g. '["staging","prod"]'.
+    required: false
+    default: '@last'
+
   # ── Guardrails ────────────────────────────────────────────────────────────
   admin-required-from:
     description: |
