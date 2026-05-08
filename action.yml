@@ -190,6 +190,26 @@ inputs:
     required: false
     default: 'true'
 
+  # ── Guardrails ────────────────────────────────────────────────────────────
+  admin-required-from:
+    description: |
+      Threshold environment for the manual-release guardrail. When non-empty,
+      manual workflow_dispatch runs whose target environment is at or after
+      this threshold (in the `environments` list) require the actor to have
+      `permission: admin` on the repository.
+
+      Examples (with environments = ["dev","staging","prod"]):
+        ''        → no enforcement (default)
+        prod      → only prod releases require admin
+        staging   → staging and prod require admin
+        dev       → all envs require admin
+
+      The auth token must allow Repository: Administration: Read. With
+      auth-mode: public-app, grant the permission on the Release Runner App
+      and accept it on the installation.
+    required: false
+    default: ''
+
   # ── Common release options ────────────────────────────────────────────────
   working-directory:
     description: |
@@ -327,23 +347,59 @@ runs:
       run: "${GITHUB_ACTION_PATH}/scripts/resolve-auth-token.sh"
 
     # ── 1b. Manual-release guardrail ────────────────────────────────────────
-    # Restrict workflow_dispatch in release mode to repo admins. Push and
-    # promotion-PR-merge triggers are unaffected. The auth token resolved
-    # above must have Repository: Administration: Read — when using the
-    # public Release Runner App, that permission has to be granted on the
-    # App and accepted on the installation.
+    # Restrict workflow_dispatch in release mode to repo admins, scoped to a
+    # threshold environment and everything downstream of it (later in the
+    # `environments` list).
+    #
+    #   admin-required-from: ''      → no enforcement (default)
+    #   admin-required-from: prod    → only prod releases require admin
+    #   admin-required-from: staging → staging and prod require admin
+    #   admin-required-from: dev     → all envs require admin
+    #
+    # Push and promotion-PR-merge triggers are unaffected. The auth token
+    # must have Repository: Administration: Read; with the public Release
+    # Runner App, grant that permission on the App and accept it on each
+    # consuming installation.
     - name: Repo admin guardrail (manual releases only)
       if: |
         inputs.mode == 'release' &&
-        github.event_name == 'workflow_dispatch'
+        github.event_name == 'workflow_dispatch' &&
+        inputs.admin-required-from != ''
       shell: bash
       env:
         GH_TOKEN: ${{ steps.auth.outputs.token }}
         OWNER: ${{ github.repository_owner }}
         REPO: ${{ github.event.repository.name }}
         ACTOR: ${{ github.actor }}
+        THRESHOLD: ${{ inputs.admin-required-from }}
+        CURRENT_ENV: ${{ inputs.environment }}
+        ENVIRONMENTS: ${{ inputs.environments }}
       run: |
         set -euo pipefail
+
+        # Validate threshold and current env exist in the environments list.
+        THRESHOLD_IDX=$(echo "${ENVIRONMENTS}" | jq -r --arg e "${THRESHOLD}" 'index($e) // empty')
+        if [ -z "${THRESHOLD_IDX}" ]; then
+          echo "::error::admin-required-from='${THRESHOLD}' is not in environments=${ENVIRONMENTS}."
+          exit 1
+        fi
+        if [ -z "${CURRENT_ENV}" ]; then
+          echo "::error::Manual workflow_dispatch must specify an environment input when admin-required-from is set."
+          exit 1
+        fi
+        CURRENT_IDX=$(echo "${ENVIRONMENTS}" | jq -r --arg e "${CURRENT_ENV}" 'index($e) // empty')
+        if [ -z "${CURRENT_IDX}" ]; then
+          echo "::error::Resolved environment '${CURRENT_ENV}' is not in environments=${ENVIRONMENTS}."
+          exit 1
+        fi
+
+        # Skip the check if the current env is upstream of the threshold.
+        if [ "${CURRENT_IDX}" -lt "${THRESHOLD_IDX}" ]; then
+          echo "Current env '${CURRENT_ENV}' is upstream of threshold '${THRESHOLD}' — guardrail not applied."
+          exit 0
+        fi
+
+        # Look up the actor's permission on this repo.
         PERM=$(gh api "/repos/${OWNER}/${REPO}/collaborators/${ACTOR}/permission" \
                  --jq '.permission' 2>/dev/null || echo "")
         if [ -z "${PERM}" ]; then
@@ -352,10 +408,10 @@ runs:
           exit 1
         fi
         if [ "${PERM}" != "admin" ]; then
-          echo "::error::${ACTOR} is not a repo admin on ${OWNER}/${REPO} (permission=${PERM}). Manual workflow_dispatch in release mode is restricted to admins — merge a promotion PR instead."
+          echo "::error::${ACTOR} is not a repo admin on ${OWNER}/${REPO} (permission=${PERM}). Manual releases to '${CURRENT_ENV}' require admin (threshold: '${THRESHOLD}'); merge a promotion PR instead."
           exit 1
         fi
-        echo "✓ ${ACTOR} is a repo admin on ${OWNER}/${REPO}"
+        echo "✓ ${ACTOR} is a repo admin on ${OWNER}/${REPO} — manual release to '${CURRENT_ENV}' allowed."
 
     # ── 2. Checkout ─────────────────────────────────────────────────────────
     - name: Checkout

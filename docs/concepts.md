@@ -149,11 +149,27 @@ the Release Runner GitHub App. Use `auth-mode: github-token` only when
 
 ## Manual-Release Guardrail
 
-Manual `workflow_dispatch` runs in `mode: release` are restricted to repo
-admins. The action calls `GET /repos/{owner}/{repo}/collaborators/{user}/permission`
-with the resolved auth token; only `permission == admin` proceeds. Push and
-promotion-PR-merge triggers are unaffected — only manual triggers go through
-this gate.
+Manual `workflow_dispatch` runs in `mode: release` can be restricted to repo
+admins, scoped to a threshold environment and everything downstream. The
+caller sets `admin-required-from` to one of the names in `environments`; any
+manual run whose target environment is at or after that threshold then
+requires the actor to have `permission == admin` on the repository.
+
+The action calls `GET /repos/{owner}/{repo}/collaborators/{user}/permission`
+with the resolved auth token. Push and promotion-PR-merge triggers are
+unaffected — only `workflow_dispatch` goes through this gate.
+
+| `admin-required-from` | Behaviour with `environments = ["dev","staging","prod"]` |
+|---|---|
+| `''` (default) | No enforcement. Anyone with workflow access can manually release any environment. |
+| `prod` | Only manual prod releases require admin. |
+| `staging` | Manual staging and prod releases require admin. |
+| `dev` | All manual releases require admin. |
+
+The same threshold semantics apply to any environment list — for example
+`["dev","tst","acc","prd"]` with `admin-required-from: acc` gates `acc` and
+`prd`. Set the threshold to whichever environment is the cheapest one you
+still want to protect.
 
 For this to work, the auth token needs `Repository: Administration: Read`. With
 `auth-mode: public-app` (the default), grant that permission on the Release

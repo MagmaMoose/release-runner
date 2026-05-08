@@ -246,6 +246,27 @@ Enforce TBD branch naming convention on PRs (mode: ci).
 Allowed prefixes: feat, fix, chore, hotfix, docs, refactor, perf, test, ci, style.
 Set to false for BBD (branches are named after environments).
 
+### Guardrails
+
+#### `admin-required-from`
+
+- Required: `false`
+- Default: `''`
+
+Threshold environment for the manual-release guardrail. When non-empty,
+manual workflow_dispatch runs whose target environment is at or after
+this threshold (in the `environments` list) require the actor to have
+`permission: admin` on the repository.
+
+Examples (with environments = ["dev","staging","prod"]):
+
+| Value | Description |
+|---|---|
+| `''` | → no enforcement (default) |
+| `prod` | → only prod releases require admin |
+| `staging` | → staging and prod require admin |
+| `dev` | → all envs require admin The auth token must allow Repository: Administration: Read. With auth-mode: public-app, grant the permission on the Release Runner App and accept it on the installation. |
+
 ### Integrations
 
 #### `aggregate-clickup-tickets`
