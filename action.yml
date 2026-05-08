@@ -1276,6 +1276,17 @@ runs:
       if: |
         inputs.mode == 'release' &&
         inputs.aggregate-github-projects == 'true' &&
+        steps.normalize.outputs.released == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.auth.outputs.token }}
+        OWNER: ${{ github.repository_owner }}
+        REPO: ${{ github.event.repository.name }}
+        TAG: ${{ steps.normalize.outputs.tag }}
+        PRERELEASE_IDENTIFIER: ${{ steps.detect-env.outputs.prerelease_identifier }}
+      run: "${GITHUB_ACTION_PATH}/scripts/append-github-projects.sh"
+
+    # ═════════════════════════════════════════════════════════════════════════
     # RELEASE MODE — ClickUp ticket aggregation (opt-in)
     # ═════════════════════════════════════════════════════════════════════════
 
@@ -1291,7 +1302,7 @@ runs:
         REPO: ${{ github.event.repository.name }}
         TAG: ${{ steps.normalize.outputs.tag }}
         PRERELEASE_IDENTIFIER: ${{ steps.detect-env.outputs.prerelease_identifier }}
-      run: "${GITHUB_ACTION_PATH}/scripts/append-github-projects.sh"
+      run: "${GITHUB_ACTION_PATH}/scripts/append-clickup-tickets.sh"
 
     # ═════════════════════════════════════════════════════════════════════════
     # RELEASE MODE — GitHub Projects auto-move (opt-in)
@@ -1342,4 +1353,3 @@ runs:
         PRERELEASE_IDENTIFIER: ${{ steps.detect-env.outputs.prerelease_identifier }}
         TARGET_STATUS: ${{ inputs.github-projects-target-status }}
       run: "${GITHUB_ACTION_PATH}/scripts/move-github-projects.sh"
-      run: "${GITHUB_ACTION_PATH}/scripts/append-clickup-tickets.sh"

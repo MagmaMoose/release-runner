@@ -314,34 +314,6 @@ installation. With github-token, the workflow GITHUB_TOKEN cannot
 read org-scoped Projects v2 — supply a PAT with `read:project`.
 
 #### `move-github-projects-on-release`
-### Guardrails
-
-#### `admin-required-from`
-
-- Required: `false`
-- Default: `@last`
-
-Threshold environment for the manual-release guardrail. Manual
-workflow_dispatch runs whose target environment is at or after this
-threshold (in the `environments` list) require the actor to have
-`permission: admin` on the repository. Push and promotion-PR-merge
-triggers are unaffected.
-
-Special values:
-
-| Value | Description |
-|---|---|
-| `'@last'` | (default) Use the last entry in `environments`. With the default environments=["dev","staging","prod"] this protects prod only; with environments=["dev","tst","acc","prd"] it protects prd only. The point is to give every consumer production protection out of the box without needing to know the literal env name. |
-| `''` | Opt out. No manual-release guardrail. Or set to a specific environment name (must appear in `environments`) to gate that env and everything downstream. Examples (environments = ["dev","staging","prod"]): |
-| `'@last'` | → only prod releases require admin (default) |
-| `prod` | → only prod releases require admin |
-| `staging` | → staging and prod require admin |
-| `dev` | → all envs require admin |
-| `''` | → no guardrail The auth token must allow Repository: Administration: Read. With auth-mode: public-app, grant the permission on the Release Runner App and accept it on the installation. |
-
-### Integrations
-
-#### `aggregate-clickup-tickets`
 
 - Required: `false`
 - Default: `false`
@@ -375,7 +347,7 @@ Common values: 'Released', 'Done', 'Shipped'.
 #### `github-projects-move-on-environments`
 
 - Required: `false`
-- Default: `@last`
+- Default: _Not set._
 
 JSON array of environments where the auto-move should fire. Defaults
 to the production environment only (last entry of `environments`),
@@ -387,6 +359,39 @@ Special values:
 |---|---|
 | `'@last'` | (default) Resolve at runtime to the last entry of `environments`. Production-by-default in any naming. |
 | `'[]'` | Move on every environment. Or a literal JSON array of environment names, e.g. '["staging","prod"]'. |
+
+### Guardrails
+
+#### `admin-required-from`
+
+- Required: `false`
+- Default: `@last`
+
+Threshold environment for the manual-release guardrail. Manual
+workflow_dispatch runs whose target environment is at or after this
+threshold (in the `environments` list) require the actor to have
+`permission: admin` on the repository. Push and promotion-PR-merge
+triggers are unaffected.
+
+Special values:
+
+| Value | Description |
+|---|---|
+| `'@last'` | (default) Use the last entry in `environments`. With the default environments=["dev","staging","prod"] this protects prod only; with environments=["dev","tst","acc","prd"] it protects prd only. The point is to give every consumer production protection out of the box without needing to know the literal env name. |
+| `''` | Opt out. No manual-release guardrail. Or set to a specific environment name (must appear in `environments`) to gate that env and everything downstream. Examples (environments = ["dev","staging","prod"]): |
+| `'@last'` | → only prod releases require admin (default) |
+| `prod` | → only prod releases require admin |
+| `staging` | → staging and prod require admin |
+| `dev` | → all envs require admin |
+| `''` | → no guardrail The auth token must allow Repository: Administration: Read. With auth-mode: public-app, grant the permission on the Release Runner App and accept it on the installation. |
+
+### Integrations
+
+#### `aggregate-clickup-tickets`
+
+- Required: `false`
+- Default: `false`
+
 When true, after a release is created scan the commits in the release
 range and the descriptions of PRs that landed in that range for ClickUp
 ticket URLs (https://app.clickup.com/t/...). Any matches are appended
