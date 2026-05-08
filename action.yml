@@ -1052,9 +1052,19 @@ runs:
           exit 0
         fi
 
+        # Tolerate a bad path expression or non-JSON content rather than
+        # failing the release — version-file is opt-in plumbing and
+        # mis-configuring it should warn, not block the publish.
         TMP=$(mktemp)
-        jq --arg v "${VERSION}" "${JSON_PATH} = \$v" "${FILE}" > "${TMP}"
-        mv "${TMP}" "${FILE}"
+        if ! jq --arg v "${VERSION}" "${JSON_PATH} = \$v" "${FILE}" > "${TMP}" 2>/tmp/jq.err; then
+          echo "::warning::Failed to inject version into ${FILE} at path '${JSON_PATH}': $(cat /tmp/jq.err 2>/dev/null | head -1). Skipping."
+          rm -f "${TMP}"
+          exit 0
+        fi
+        if ! mv "${TMP}" "${FILE}"; then
+          echo "::warning::Failed to write ${FILE} after injection — skipping."
+          exit 0
+        fi
         echo "Injected version ${VERSION} into ${FILE} at ${JSON_PATH}"
 
         git config user.name  "github-actions[bot]"
