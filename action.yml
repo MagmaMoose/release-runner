@@ -600,7 +600,7 @@ runs:
               to_entries
               | map(select(.key | contains("*")))
               | sort_by(.key | length) | reverse
-              | map(. as $e | select($b | test("^" + ($e.key | gsub("\\."; "\\\\.") | gsub("\\*"; ".*")) + "$")))
+              | map(. as $e | select($b | test("^" + ($e.key | gsub("\\."; "\\\\.") | gsub("\\*"; "[^/]*")) + "$")))
               | (.[0].value // empty)
             ')
             if [ -n "${DETECTED_ENV}" ]; then
