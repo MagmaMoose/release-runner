@@ -78,6 +78,41 @@ Branch mapping:
 For BBD pull request CI, set `enforce_branch_naming: 'false'` because the
 target branches are environment names.
 
+### GitFlow (strict)
+
+Strict GitFlow has dynamic branch families: `release/*` for stabilization
+and `hotfix/*` for emergency patches. Map them with branch globs in the
+BBD model:
+
+```yaml
+with:
+  mode: release
+  deployment-model: bbd
+  branch-map: |
+    {
+      "develop":   "dev",
+      "release/*": "staging",
+      "hotfix/*":  "prod",
+      "main":      "prod"
+    }
+  environments: '["dev", "staging", "prod"]'
+  prerelease-identifiers: '{"dev": "dev", "staging": "rc"}'
+  enforce_branch_naming: 'false'
+```
+
+Branch mapping:
+
+| Branch | Environment | Tag |
+|---|---|---|
+| `develop` | `dev` | `v1.2.3-dev.1` |
+| `release/X.Y` | `staging` | `v1.2.3-rc.1` |
+| `hotfix/X.Y.Z` | `prod` | `v1.2.3` |
+| `main` | `prod` | `v1.2.3` |
+
+See [Branching strategies](branching-strategies.md) for when to use
+GitFlow vs. TBD or plain BBD, and the versioning-tool config you'll need
+on each branch family.
+
 ## 2. Choose A Versioning Tool
 
 | Tool | Input | Config file |

@@ -88,6 +88,12 @@ Example:
 Use BBD when your repository already promotes work by merging between
 environment branches.
 
+`branch-map` keys can be exact branch names *or* globs (any key containing
+`*`). Globs are anchored at both ends and dots are escaped, so
+`{"release/*": "staging"}` matches `release/1.0` but not `release.1.0`.
+This is what enables strict GitFlow on top of BBD — see
+[Branching strategies](branching-strategies.md) for the GitFlow mapping.
+
 ## Environment Order
 
 The `environments` input is ordered. The last environment is stable. Every
@@ -136,6 +142,51 @@ Release mode tries to retag an existing image before rebuilding:
 
 If the source image cannot be found, the action runs a fresh Docker Bake build
 and pushes the release tag. Stable releases also get `latest`.
+
+## Persisting The Version In A Tracked File
+
+Some apps need to know their own version at runtime — a .NET service that
+displays "v1.2.3" in its footer reads it from `appsettings.json`, a Helm
+chart needs the version in `Chart.yaml`, a Go service might want it in a
+generated `version.go`. Set `version-file` (and optionally
+`version-file-json-path`) and Release Runner will:
+
+1. Inject the resolved version into the JSON file at the given path.
+2. Commit with `[skip ci]`.
+3. Push back to the active branch using the resolved release token, so
+   the push bypasses branch-protection rulesets.
+
+Works with every versioning tool. Off by default. The file must be JSON
+today. The commit lands *after* the release tag, so the tag itself does
+not include the version-file change — that's deliberate, the tag is your
+release boundary.
+
+```yaml
+with:
+  version-file: src/MyApp.Web/appsettings.json
+  version-file-json-path: .Application.Version
+```
+
+## GitHub Projects Integration
+
+Two optional toggles, both off by default.
+
+`aggregate-github-projects: true` — after a release publishes, Release
+Runner walks commits in the release range and the PRs they came from,
+collects issue/PR refs (`#NNN`), looks up Projects v2 membership for
+each, and appends a `## GitHub Project items` section to the release
+notes (and any open promotion PR body for this tag). Grouped by Project,
+showing each item's current Status when available.
+
+`move-github-projects-on-release: true` — same ref collection, but
+instead of just listing them it moves every linked Projects v2 item to
+`github-projects-target-status` (default `Released`). Restricted to the
+production environment by default, widen with
+`github-projects-move-on-environments`.
+
+Both require token scopes that go beyond the Release Runner App's
+defaults — see the input documentation in
+[Action reference](reference/action-inputs-outputs.md).
 
 ## Release Write Token
 

@@ -65,9 +65,21 @@ inputs:
 
   branch-map:
     description: |
-      JSON object mapping branch names to environment names.
-      Only used when deployment-model is bbd.
-      Example: {"dev": "dev", "staging": "staging", "main": "prod"}
+      JSON object mapping branch names to environment names. Only used when
+      deployment-model is bbd.
+
+      Plain BBD (one branch per environment):
+        {"dev": "dev", "staging": "staging", "main": "prod"}
+
+      Strict GitFlow (release/* and hotfix/* are dynamic branch families).
+      Keys containing `*` are treated as globs — they match any segment up
+      to the next slash boundary the same way shell globs do, anchored at
+      both ends:
+        {"develop": "dev", "release/*": "staging", "hotfix/*": "prod", "main": "prod"}
+
+      Exact matches always win over globs. When two globs both match, the
+      one with the longer key wins, so a specific pattern like
+      `release/hotfix/*` beats `release/*`.
     required: false
     default: ''
 
@@ -190,6 +202,74 @@ inputs:
     required: false
     default: 'true'
 
+  # ── Integrations: GitHub Projects ─────────────────────────────────────────
+  aggregate-github-projects:
+    description: |
+      When true, after a release is created, walk the commits in the release
+      range and the bodies of any PRs landed in that range, collect issue
+      and PR references (#NNN), look up their Projects v2 membership via
+      the GitHub GraphQL API, and append a "## GitHub Project items"
+      section (grouped by Project, with the item's Status when available)
+      to the GitHub Release notes and to any open promotion PR body that
+      mentions the tag.
+
+      The auth token must allow:
+        - Repository: Issues / Pull requests: Read
+        - Repository: Contents: Read
+        - Organization: Projects: Read
+        - Repository: Releases: Write (to edit release notes)
+        - Repository: Pull requests: Write (to edit promotion PR bodies)
+      With auth-mode: public-app, the Release Runner App already covers the
+      first two; you must grant the rest on the App and accept on the
+      installation. With github-token, the workflow GITHUB_TOKEN cannot
+      read org-scoped Projects v2 — supply a PAT with `read:project`.
+    required: false
+    default: 'false'
+
+  move-github-projects-on-release:
+    description: |
+      When true, after a release is created, move every Projects v2 item
+      linked to issues/PRs in the release range to a target Status.
+      Intended for closing the loop on releases — e.g. moving "In review"
+      cards to "Released" when the prod tag is cut.
+
+      Set `github-projects-target-status` to the Status value to move to
+      (must already exist on the Project). The status move is opt-in
+      because not every project board has a "Released" column.
+
+      Skipped silently when the project's Status field has no matching
+      option. Works alongside `aggregate-github-projects` — the two are
+      independent toggles.
+
+      The auth token must allow Organization: Projects: Write. With
+      auth-mode: public-app, grant on the Release Runner App. With
+      github-token, supply a PAT with `project` scope.
+    required: false
+    default: 'false'
+
+  github-projects-target-status:
+    description: |
+      Target Status name for `move-github-projects-on-release`. Must match
+      an existing single-select option on each project's Status field.
+      Common values: 'Released', 'Done', 'Shipped'.
+    required: false
+    default: 'Released'
+
+  github-projects-move-on-environments:
+    description: |
+      JSON array of environments where the auto-move should fire. Defaults
+      to the production environment only (last entry of `environments`),
+      so prereleases don't prematurely mark items released.
+
+      Special values:
+        '@last'   (default) Resolve at runtime to the last entry of
+                  `environments`. Production-by-default in any naming.
+        '[]'      Move on every environment.
+
+      Or a literal JSON array of environment names, e.g. '["staging","prod"]'.
+    required: false
+    default: '@last'
+
   # ── Common release options ────────────────────────────────────────────────
   working-directory:
     description: |
@@ -210,6 +290,32 @@ inputs:
     required: false
     default: 'true'
 
+  # ── Version file injection (any tool) ─────────────────────────────────────
+  version-file:
+    description: |
+      Path to a JSON file where the released version is injected and committed
+      back to the branch after every release. Works with every versioning
+      tool, not just GitVersion. Typical use: persist the version into
+      `appsettings.json` for a .NET app so the running container can display
+      its own version, or into a Helm `Chart.yaml`, etc.
+
+      The commit uses the resolved release auth token (Release Runner App,
+      private app, or `github-token`), so it can bypass branch-protection
+      rulesets when the App is in the bypass list. The commit message ends
+      with `[skip ci]` so the push does not retrigger the release workflow.
+
+      Leave empty to disable. The file must exist or the step is skipped
+      with a warning.
+    required: false
+    default: ''
+
+  version-file-json-path:
+    description: |
+      jq path for the version field inside `version-file`. Only used when
+      `version-file` is set. Example: `.Application.Version`
+    required: false
+    default: '.Application.Version'
+
   # ── GitVersion-specific ───────────────────────────────────────────────────
   gitversion-spec:
     description: 'GitVersion version spec (e.g., 6.x). Only used when versioning-tool is gitversion.'
@@ -223,18 +329,17 @@ inputs:
 
   gitversion-appsettings-file:
     description: |
-      Path to a JSON file (e.g., appsettings.json) where the version is injected
-      and committed back to the branch. Only used when versioning-tool is gitversion.
+      DEPRECATED — use `version-file` instead. Retained for backwards
+      compatibility. When both are set, `version-file` wins.
     required: false
     default: ''
 
   gitversion-appsettings-version-path:
     description: |
-      jq path for the version field in the appsettings file.
-      Only used when gitversion-appsettings-file is set.
-      Example: .Application.Version
+      DEPRECATED — use `version-file-json-path` instead. Retained for
+      backwards compatibility.
     required: false
-    default: '.Application.Version'
+    default: ''
 
   # ── release-please-specific ───────────────────────────────────────────────
   release-please-release-type:
@@ -408,7 +513,29 @@ runs:
             exit 1
           fi
           BRANCH="${GITHUB_REF_NAME}"
+
+          # 1) Try exact match first — fastest and unambiguous.
           DETECTED_ENV=$(echo "${BRANCH_MAP}" | jq -r --arg b "${BRANCH}" '.[$b] // empty')
+
+          # 2) Fall back to glob patterns. Keys containing `*` are treated as
+          # globs (translated to anchored regex with dots escaped). This
+          # lets strict GitFlow callers map dynamic branch families:
+          #   {"develop":"dev","release/*":"staging","hotfix/*":"prod","main":"prod"}
+          # We sort longest-key-first so a specific pattern like
+          # `release/hotfix/*` beats `release/*` when both match.
+          if [ -z "${DETECTED_ENV}" ]; then
+            DETECTED_ENV=$(echo "${BRANCH_MAP}" | jq -r --arg b "${BRANCH}" '
+              to_entries
+              | map(select(.key | contains("*")))
+              | sort_by(.key | length) | reverse
+              | map(. as $e | select($b | test("^" + ($e.key | gsub("\\."; "\\\\.") | gsub("\\*"; ".*")) + "$")))
+              | (.[0].value // empty)
+            ')
+            if [ -n "${DETECTED_ENV}" ]; then
+              echo "BBD: matched glob pattern in branch-map for '${BRANCH}'"
+            fi
+          fi
+
           if [ -z "${DETECTED_ENV}" ]; then
             echo "::error::Branch '${BRANCH}' has no mapping in branch-map: ${BRANCH_MAP}"
             exit 1
@@ -664,35 +791,6 @@ runs:
           gh release create "${TAG}" --title "${TAG}" --generate-notes ${IS_PRE_FLAG} || true
         fi
 
-    - name: Inject version into appsettings
-      id: gitversion-appsettings
-      if: inputs.mode == 'release' && inputs.versioning-tool == 'gitversion' && inputs.gitversion-appsettings-file != ''
-      shell: bash
-      env:
-        GITHUB_TOKEN: ${{ steps.auth.outputs.token }}
-      run: |
-        set -euo pipefail
-        APPSETTINGS="${{ inputs.gitversion-appsettings-file }}"
-        JSON_PATH="${{ inputs.gitversion-appsettings-version-path }}"
-        VERSION="${{ steps.gitversion-tag.outputs.version }}"
-        if [ ! -f "${APPSETTINGS}" ]; then
-          echo "::warning::appsettings file '${APPSETTINGS}' not found — skipping version injection"
-          exit 0
-        fi
-        TMP=$(mktemp)
-        jq --arg v "${VERSION}" "${JSON_PATH} = \$v" "${APPSETTINGS}" > "${TMP}"
-        mv "${TMP}" "${APPSETTINGS}"
-        echo "Injected version ${VERSION} into ${APPSETTINGS} at ${JSON_PATH}"
-        git config user.name  "github-actions[bot]"
-        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git add "${APPSETTINGS}"
-        if ! git diff --cached --quiet; then
-          git commit -m "chore(release): persist version ${VERSION} in appsettings [skip ci]"
-          REMOTE_URL=$(git remote get-url origin)
-          AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GITHUB_TOKEN}@|")
-          git push "${AUTHED_URL}" HEAD:"${GITHUB_REF_NAME}"
-        fi
-
     - name: Run release-please
       id: release-please
       if: inputs.mode == 'release' && inputs.versioning-tool == 'release-please'
@@ -751,6 +849,87 @@ runs:
         echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
         echo "released=${RELEASED}" >> "$GITHUB_OUTPUT"
         echo "Tool: ${TOOL} | Version: ${VERSION} | Tag: ${TAG} | Released: ${RELEASED}"
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # RELEASE MODE — Persist version into a tracked file (any tool)
+    # ═════════════════════════════════════════════════════════════════════════
+    #
+    # Common in .NET (appsettings.json) and Helm (Chart.yaml) deployments
+    # where the running app or chart needs to know its own version. Works
+    # with every versioning tool and runs only when a release was created.
+    #
+    # The push uses the resolved release auth token, so it bypasses branch
+    # protection rulesets when the Release Runner App (or your private app)
+    # is in the bypass list. The commit message ends with `[skip ci]` so
+    # the push does not retrigger the release workflow.
+
+    - name: Inject version into tracked file
+      id: version-file-inject
+      if: |
+        inputs.mode == 'release' &&
+        steps.normalize.outputs.released == 'true' &&
+        (inputs.version-file != '' || inputs.gitversion-appsettings-file != '')
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.auth.outputs.token }}
+      run: |
+        set -euo pipefail
+
+        # Prefer the new generic input. Fall back to the deprecated gitversion-prefixed
+        # alias so existing callers keep working.
+        FILE="${{ inputs.version-file }}"
+        JSON_PATH="${{ inputs.version-file-json-path }}"
+        if [ -z "${FILE}" ]; then
+          FILE="${{ inputs.gitversion-appsettings-file }}"
+          if [ -n "${{ inputs.gitversion-appsettings-version-path }}" ]; then
+            JSON_PATH="${{ inputs.gitversion-appsettings-version-path }}"
+          fi
+          echo "::notice::gitversion-appsettings-file is deprecated; use version-file."
+        fi
+
+        VERSION="${{ steps.normalize.outputs.version }}"
+
+        if [ ! -f "${FILE}" ]; then
+          echo "::warning::version-file '${FILE}' not found — skipping injection."
+          exit 0
+        fi
+        if [ -z "${VERSION}" ]; then
+          echo "::warning::No version resolved — skipping injection."
+          exit 0
+        fi
+
+        TMP=$(mktemp)
+        jq --arg v "${VERSION}" "${JSON_PATH} = \$v" "${FILE}" > "${TMP}"
+        mv "${TMP}" "${FILE}"
+        echo "Injected version ${VERSION} into ${FILE} at ${JSON_PATH}"
+
+        git config user.name  "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add "${FILE}"
+        if git diff --cached --quiet; then
+          echo "No changes to commit — file already at ${VERSION}."
+          exit 0
+        fi
+
+        git commit -m "chore(release): persist version ${VERSION} in $(basename "${FILE}") [skip ci]"
+
+        # Best-effort sync to avoid losing the release if the branch moved
+        # in parallel (other commits, Flux image bumps, etc.).
+        BRANCH="${GITHUB_REF_NAME}"
+        git fetch origin "${BRANCH}"
+        if ! git rebase "origin/${BRANCH}"; then
+          echo "::warning::Could not rebase ${FILE} commit onto latest ${BRANCH}; skipping push."
+          git rebase --abort || true
+          exit 0
+        fi
+
+        REMOTE_URL=$(git remote get-url origin)
+        AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GITHUB_TOKEN}@|")
+        if ! git push "${AUTHED_URL}" "HEAD:${BRANCH}"; then
+          echo "::warning::Could not push ${FILE} commit (non-fast-forward or protected branch). Continuing release."
+          exit 0
+        fi
+        echo "Pushed ${FILE} update for ${VERSION} to ${BRANCH}."
 
     # ═════════════════════════════════════════════════════════════════════════
     # RELEASE MODE — Docker image promotion
@@ -965,3 +1144,79 @@ runs:
           --base "${TARGET}" \
           --head "${BRANCH}") || { echo "::warning::PR already exists for ${BRANCH}"; exit 0; }
         gh pr edit "${PR_URL}" --add-label "promotion" 2>/dev/null || true
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # RELEASE MODE — GitHub Projects aggregation (opt-in)
+    # ═════════════════════════════════════════════════════════════════════════
+    #
+    # After a release publishes, walk commits + linked PRs in the release
+    # range, collect issue/PR refs (#NNN), look up each ref's Projects v2
+    # membership, and append a "## GitHub Project items" section to the
+    # release notes (and any open promotion PR body for this tag).
+    #
+    # Purely additive — never fails the release on its own. Requires a
+    # token with org-scoped Projects v2 read; see the input docs.
+
+    - name: Append GitHub Project items to release docs
+      if: |
+        inputs.mode == 'release' &&
+        inputs.aggregate-github-projects == 'true' &&
+        steps.normalize.outputs.released == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.auth.outputs.token }}
+        OWNER: ${{ github.repository_owner }}
+        REPO: ${{ github.event.repository.name }}
+        TAG: ${{ steps.normalize.outputs.tag }}
+        PRERELEASE_IDENTIFIER: ${{ steps.detect-env.outputs.prerelease_identifier }}
+      run: "${GITHUB_ACTION_PATH}/scripts/append-github-projects.sh"
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # RELEASE MODE — GitHub Projects auto-move (opt-in)
+    # ═════════════════════════════════════════════════════════════════════════
+    #
+    # Move every Projects v2 item linked to issues/PRs in the release range
+    # to a target Status (e.g. "Released"). Off by default. Restricted to
+    # the production environment unless `github-projects-move-on-environments`
+    # widens the scope. Requires a token with org-scoped Projects v2 write.
+
+    - name: Resolve Projects move scope
+      id: projects-move-scope
+      if: |
+        inputs.mode == 'release' &&
+        inputs.move-github-projects-on-release == 'true' &&
+        steps.normalize.outputs.released == 'true'
+      shell: bash
+      env:
+        ENVS: ${{ inputs.environments }}
+        SCOPE_RAW: ${{ inputs.github-projects-move-on-environments }}
+        CURRENT_ENV: ${{ steps.detect-env.outputs.environment }}
+      run: |
+        set -euo pipefail
+        if [ "${SCOPE_RAW}" = "@last" ] || [ -z "${SCOPE_RAW}" ]; then
+          ALLOWED=$(echo "${ENVS}" | jq -c '[.[-1]]')
+        elif [ "${SCOPE_RAW}" = "[]" ]; then
+          ALLOWED="${ENVS}"
+        else
+          ALLOWED="${SCOPE_RAW}"
+        fi
+        if echo "${ALLOWED}" | jq -e --arg e "${CURRENT_ENV}" 'index($e) != null' >/dev/null; then
+          echo "should-run=true" >> "$GITHUB_OUTPUT"
+          echo "Auto-move enabled for '${CURRENT_ENV}' (allowed: ${ALLOWED})"
+        else
+          echo "should-run=false" >> "$GITHUB_OUTPUT"
+          echo "Auto-move skipped for '${CURRENT_ENV}' (not in ${ALLOWED})"
+        fi
+
+    - name: Move GitHub Project items to target status
+      if: |
+        steps.projects-move-scope.outputs.should-run == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.auth.outputs.token }}
+        OWNER: ${{ github.repository_owner }}
+        REPO: ${{ github.event.repository.name }}
+        TAG: ${{ steps.normalize.outputs.tag }}
+        PRERELEASE_IDENTIFIER: ${{ steps.detect-env.outputs.prerelease_identifier }}
+        TARGET_STATUS: ${{ inputs.github-projects-target-status }}
+      run: "${GITHUB_ACTION_PATH}/scripts/move-github-projects.sh"

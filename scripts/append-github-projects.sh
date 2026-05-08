@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# Append a "GitHub Project items" section to the release notes (and the
+# auto-opened promotion PR body, if one exists) listing every Projects v2
+# item linked to issues or PRs that landed in the release range.
+#
+# Inputs (env):
+#   GH_TOKEN             token with read access to issues, PRs, and
+#                        organization Projects v2 (see docs)
+#   OWNER, REPO          repository identity
+#   TAG                  the tag of the release we just published
+#   PRERELEASE_IDENTIFIER  (optional) prerelease identifier, used to find
+#                          the previous tag of the same series
+#
+# Behaviour:
+#   - Resolves the previous release tag (same prerelease series, or the
+#     last stable for stable releases) and walks commits in TAG range.
+#   - Collects issue/PR numbers referenced in commit messages and PR
+#     bodies (#NNN, "Closes #NNN", "Fixes #NNN", etc.).
+#   - For each ref, queries Projects v2 membership via GraphQL.
+#   - Groups by project, then appends a "## GitHub Project items" section
+#     to the GitHub Release body (and any open promotion PR body).
+#
+# This is purely additive — never fails the release. Errors are logged
+# as workflow warnings.
+
+set -euo pipefail
+
+: "${GH_TOKEN:?GH_TOKEN is required}"
+: "${OWNER:?OWNER is required}"
+: "${REPO:?REPO is required}"
+: "${TAG:?TAG is required}"
+PRERELEASE_IDENTIFIER="${PRERELEASE_IDENTIFIER:-}"
+
+log() { echo "::notice::[github-projects] $*"; }
+warn() { echo "::warning::[github-projects] $*"; }
+
+# ─── 1. Find the previous tag in the same series ──────────────────────────
+PREV_TAG=""
+if [ -n "${PRERELEASE_IDENTIFIER}" ]; then
+  # Same prerelease series, e.g. previous v1.2.3-rc.* before v1.2.3-rc.5
+  PREV_TAG=$(git tag -l --sort=-v:refname \
+    | grep -E "\\-${PRERELEASE_IDENTIFIER}\\.[0-9]+$" \
+    | grep -v "^${TAG}$" \
+    | head -1 || true)
+fi
+if [ -z "${PREV_TAG}" ]; then
+  PREV_TAG=$(git tag -l --sort=-v:refname \
+    | grep -vE -- "-[a-zA-Z][^.]*\\.[0-9]+$" \
+    | grep -v "^${TAG}$" \
+    | head -1 || true)
+fi
+
+if [ -z "${PREV_TAG}" ]; then
+  log "No previous tag found — using full history of ${TAG}."
+  COMMIT_RANGE="${TAG}"
+else
+  log "Walking commits ${PREV_TAG}..${TAG}."
+  COMMIT_RANGE="${PREV_TAG}..${TAG}"
+fi
+
+# ─── 2. Collect issue/PR numbers from commits + linked PR bodies ──────────
+TMP_REFS=$(mktemp)
+trap 'rm -f "${TMP_REFS}"' EXIT
+
+# Commit messages: scan for #NNN, "Closes/Fixes/Resolves #NNN"
+git log --pretty=format:'%B' "${COMMIT_RANGE}" 2>/dev/null \
+  | grep -oE '#[0-9]+' \
+  | tr -d '#' \
+  | sort -un \
+  >> "${TMP_REFS}" || true
+
+# Linked PRs: each commit may have an associated PR (merge or squash). Grab
+# the PR body too and rescan.
+COMMIT_SHAS=$(git log --pretty=format:'%H' "${COMMIT_RANGE}" 2>/dev/null || true)
+for SHA in ${COMMIT_SHAS}; do
+  PR_NUMS=$(gh api "repos/${OWNER}/${REPO}/commits/${SHA}/pulls" \
+    --jq '.[].number' 2>/dev/null || true)
+  for PR in ${PR_NUMS}; do
+    echo "${PR}" >> "${TMP_REFS}"
+    PR_BODY=$(gh api "repos/${OWNER}/${REPO}/pulls/${PR}" --jq '.body // ""' 2>/dev/null || echo "")
+    echo "${PR_BODY}" \
+      | grep -oE '#[0-9]+' \
+      | tr -d '#' \
+      >> "${TMP_REFS}" || true
+  done
+done
+
+REFS=$(sort -un "${TMP_REFS}")
+if [ -z "${REFS}" ]; then
+  log "No issue/PR references found in ${COMMIT_RANGE} — nothing to aggregate."
+  exit 0
+fi
+log "Collected $(echo "${REFS}" | wc -l | tr -d ' ') unique refs."
+
+# ─── 3. Query Projects v2 membership per ref ───────────────────────────────
+# We try issue first, then pullRequest. Both expose projectItems with the
+# parent project's title and URL plus the item's ID and Status field value
+# (when present). The query uses a fragment because both types share the
+# projectItems field shape.
+QUERY='
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      ... ProjectFields
+    }
+    pullRequest(number: $number) {
+      ... ProjectFields
+    }
+  }
+}
+fragment ProjectFields on Node {
+  ... on Issue { number title url projectItems(first: 20) { nodes { ...Item } } }
+  ... on PullRequest { number title url projectItems(first: 20) { nodes { ...Item } } }
+}
+fragment Item on ProjectV2Item {
+  id
+  project { title url number }
+  fieldValueByName(name: "Status") {
+    ... on ProjectV2ItemFieldSingleSelectValue { name }
+  }
+}
+'
+
+AGGREGATE=$(mktemp)
+trap 'rm -f "${TMP_REFS}" "${AGGREGATE}"' EXIT
+echo "[]" > "${AGGREGATE}"
+
+for NUM in ${REFS}; do
+  RESPONSE=$(gh api graphql \
+    -f query="${QUERY}" \
+    -F owner="${OWNER}" \
+    -F repo="${REPO}" \
+    -F number="${NUM}" 2>/dev/null || echo "{}")
+
+  # Pick whichever node returned non-null (issue or pullRequest).
+  NODE=$(echo "${RESPONSE}" | jq '.data.repository.issue // .data.repository.pullRequest // null')
+  if [ "${NODE}" = "null" ] || [ -z "${NODE}" ]; then
+    continue
+  fi
+
+  ITEM_COUNT=$(echo "${NODE}" | jq '.projectItems.nodes | length')
+  if [ "${ITEM_COUNT}" -eq 0 ]; then
+    continue
+  fi
+
+  # Append each project item with the ref's title/URL.
+  ENRICHED=$(echo "${NODE}" | jq '
+    .projectItems.nodes
+    | map({
+        project: .project,
+        status: (.fieldValueByName.name // null),
+        ref: { number: $node.number, title: $node.title, url: $node.url }
+      })
+  ' --argjson node "${NODE}")
+
+  jq --argjson new "${ENRICHED}" '. + $new' "${AGGREGATE}" > "${AGGREGATE}.tmp"
+  mv "${AGGREGATE}.tmp" "${AGGREGATE}"
+done
+
+ITEM_TOTAL=$(jq 'length' "${AGGREGATE}")
+if [ "${ITEM_TOTAL}" -eq 0 ]; then
+  log "No Projects v2 items linked to any ref in this range — nothing to append."
+  exit 0
+fi
+log "Found ${ITEM_TOTAL} project item link(s) across this release."
+
+# ─── 4. Render Markdown grouped by project ─────────────────────────────────
+SECTION=$(jq -r '
+  group_by(.project.url) | map({
+    project: .[0].project,
+    items: (map({status: .status, ref: .ref}) | unique_by(.ref.number))
+  })
+  | sort_by(.project.title)
+  | map(
+      "### [\(.project.title)](\(.project.url))\n\n"
+      + (.items
+         | map(
+             "- [#\(.ref.number) \(.ref.title)](\(.ref.url))"
+             + (if .status then " — _\(.status)_" else "" end)
+           )
+         | join("\n"))
+    )
+  | "## GitHub Project items\n\n" + join("\n\n")
+' "${AGGREGATE}")
+
+if [ -z "${SECTION}" ] || [ "${SECTION}" = "null" ]; then
+  warn "Failed to render Markdown section — skipping."
+  exit 0
+fi
+
+# ─── 5. Append to release notes (and any open promotion PR body) ──────────
+RELEASE_BODY=$(gh release view "${TAG}" --json body --jq '.body' 2>/dev/null || echo "")
+if [ -n "${RELEASE_BODY}" ] && ! echo "${RELEASE_BODY}" | grep -q "^## GitHub Project items"; then
+  NEW_BODY=$(printf '%s\n\n%s\n' "${RELEASE_BODY}" "${SECTION}")
+  if gh release edit "${TAG}" --notes "${NEW_BODY}" >/dev/null 2>&1; then
+    log "Appended Project items to release notes for ${TAG}."
+  else
+    warn "Could not edit release notes for ${TAG} — token missing 'Releases: write'?"
+  fi
+fi
+
+# Promotion PRs (if any) have a body that mentions the tag; append there too.
+PR_NUMBERS=$(gh pr list --state open --search "in:title ${TAG}" --json number --jq '.[].number' 2>/dev/null || true)
+for PR in ${PR_NUMBERS}; do
+  PR_BODY=$(gh pr view "${PR}" --json body --jq '.body' 2>/dev/null || echo "")
+  if [ -n "${PR_BODY}" ] && ! echo "${PR_BODY}" | grep -q "^## GitHub Project items"; then
+    NEW_PR_BODY=$(printf '%s\n\n%s\n' "${PR_BODY}" "${SECTION}")
+    if gh pr edit "${PR}" --body "${NEW_PR_BODY}" >/dev/null 2>&1; then
+      log "Appended Project items to promotion PR #${PR}."
+    else
+      warn "Could not edit promotion PR #${PR} — token missing 'Pull requests: write'?"
+    fi
+  fi
+done
