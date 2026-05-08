@@ -189,9 +189,18 @@ if [ -z "${SECTION}" ] || [ "${SECTION}" = "null" ]; then
 fi
 
 # ─── 5. Append to release notes (and any open promotion PR body) ──────────
-RELEASE_BODY=$(gh release view "${TAG}" --json body --jq '.body' 2>/dev/null || echo "")
-if [ -n "${RELEASE_BODY}" ] && ! echo "${RELEASE_BODY}" | grep -q "^## GitHub Project items"; then
-  NEW_BODY=$(printf '%s\n\n%s\n' "${RELEASE_BODY}" "${SECTION}")
+# Treat an empty existing body as a valid starting point — append the
+# section regardless. Skip only if the section is already present, to
+# avoid duplicate appends on re-runs.
+RELEASE_BODY=$(gh release view "${TAG}" --json body --jq '.body // ""' 2>/dev/null || echo "")
+if echo "${RELEASE_BODY}" | grep -q "^## GitHub Project items"; then
+  log "Release notes for ${TAG} already contain a Project items section — skipping."
+else
+  if [ -n "${RELEASE_BODY}" ]; then
+    NEW_BODY=$(printf '%s\n\n%s\n' "${RELEASE_BODY}" "${SECTION}")
+  else
+    NEW_BODY="${SECTION}"
+  fi
   if gh release edit "${TAG}" --notes "${NEW_BODY}" >/dev/null 2>&1; then
     log "Appended Project items to release notes for ${TAG}."
   else
@@ -202,13 +211,19 @@ fi
 # Promotion PRs (if any) have a body that mentions the tag; append there too.
 PR_NUMBERS=$(gh pr list --state open --search "in:title ${TAG}" --json number --jq '.[].number' 2>/dev/null || true)
 for PR in ${PR_NUMBERS}; do
-  PR_BODY=$(gh pr view "${PR}" --json body --jq '.body' 2>/dev/null || echo "")
-  if [ -n "${PR_BODY}" ] && ! echo "${PR_BODY}" | grep -q "^## GitHub Project items"; then
+  PR_BODY=$(gh pr view "${PR}" --json body --jq '.body // ""' 2>/dev/null || echo "")
+  if echo "${PR_BODY}" | grep -q "^## GitHub Project items"; then
+    log "Promotion PR #${PR} already contains a Project items section — skipping."
+    continue
+  fi
+  if [ -n "${PR_BODY}" ]; then
     NEW_PR_BODY=$(printf '%s\n\n%s\n' "${PR_BODY}" "${SECTION}")
-    if gh pr edit "${PR}" --body "${NEW_PR_BODY}" >/dev/null 2>&1; then
-      log "Appended Project items to promotion PR #${PR}."
-    else
-      warn "Could not edit promotion PR #${PR} — token missing 'Pull requests: write'?"
-    fi
+  else
+    NEW_PR_BODY="${SECTION}"
+  fi
+  if gh pr edit "${PR}" --body "${NEW_PR_BODY}" >/dev/null 2>&1; then
+    log "Appended Project items to promotion PR #${PR}."
+  else
+    warn "Could not edit promotion PR #${PR} — token missing 'Pull requests: write'?"
   fi
 done
