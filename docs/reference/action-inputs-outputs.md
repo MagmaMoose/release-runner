@@ -289,7 +289,12 @@ Path to a JSON file where the released version is injected and committed
 back to the branch after every release. Works with every versioning
 tool, not just GitVersion. Typical use: persist the version into
 `appsettings.json` for a .NET app so the running container can display
-its own version, or into a Helm `Chart.yaml`, etc.
+its own version.
+
+JSON only — the injection step uses `jq`. YAML targets (e.g. Helm
+`Chart.yaml`) aren't supported today; if `jq` errors on the file
+the step warns and skips so a mis-configured file does not block
+the release.
 
 The commit uses the resolved release auth token (Release Runner App,
 private app, or `github-token`), so it can bypass branch-protection

@@ -175,21 +175,24 @@ and pushes the release tag. Stable releases also get `latest`.
 
 ## Persisting The Version In A Tracked File
 
-Some apps need to know their own version at runtime — a .NET service that
-displays "v1.2.3" in its footer reads it from `appsettings.json`, a Helm
-chart needs the version in `Chart.yaml`, a Go service might want it in a
-generated `version.go`. Set `version-file` (and optionally
-`version-file-json-path`) and Release Runner will:
+Some apps need to know their own version at runtime — a .NET service
+that displays "v1.2.3" in its footer reads it from `appsettings.json`,
+a Node service from a generated `version.json`, a frontend bundle from
+a manifest. Set `version-file` (and optionally `version-file-json-path`)
+and Release Runner will:
 
 1. Inject the resolved version into the JSON file at the given path.
 2. Commit with `[skip ci]`.
 3. Push back to the active branch using the resolved release token, so
    the push bypasses branch-protection rulesets.
 
-Works with every versioning tool. Off by default. The file must be JSON
-today. The commit lands *after* the release tag, so the tag itself does
-not include the version-file change — that's deliberate, the tag is your
-release boundary.
+Works with every versioning tool. Off by default. **The file must be
+JSON** — the injection step uses `jq` and will warn-and-skip on YAML or
+non-JSON content. (Helm `Chart.yaml` and other YAML targets aren't
+supported today; use a small repo-side hook to mirror the JSON value
+into YAML if you need it.) The commit lands *after* the release tag,
+so the tag itself does not include the version-file change — that's
+deliberate, the tag is your release boundary.
 
 ```yaml
 with:

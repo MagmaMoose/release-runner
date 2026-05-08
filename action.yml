@@ -356,7 +356,12 @@ inputs:
       back to the branch after every release. Works with every versioning
       tool, not just GitVersion. Typical use: persist the version into
       `appsettings.json` for a .NET app so the running container can display
-      its own version, or into a Helm `Chart.yaml`, etc.
+      its own version.
+
+      JSON only — the injection step uses `jq`. YAML targets (e.g. Helm
+      `Chart.yaml`) aren't supported today; if `jq` errors on the file
+      the step warns and skips so a mis-configured file does not block
+      the release.
 
       The commit uses the resolved release auth token (Release Runner App,
       private app, or `github-token`), so it can bypass branch-protection
@@ -1008,9 +1013,10 @@ runs:
     # RELEASE MODE — Persist version into a tracked file (any tool)
     # ═════════════════════════════════════════════════════════════════════════
     #
-    # Common in .NET (appsettings.json) and Helm (Chart.yaml) deployments
-    # where the running app or chart needs to know its own version. Works
-    # with every versioning tool and runs only when a release was created.
+    # Common in .NET deployments (e.g. appsettings.json) where the running
+    # app needs to know its own version. JSON only; the injection step
+    # uses jq and warns-and-skips on non-JSON content. Works with every
+    # versioning tool and runs only when a release was created.
     #
     # The push uses the resolved release auth token, so it bypasses branch
     # protection rulesets when the Release Runner App (or your private app)
