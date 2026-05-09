@@ -3,6 +3,12 @@
 This page maps common release flows to action inputs. Read
 [Concepts](concepts.md) first if TBD, BBD, or Docker promotion are new to you.
 
+> **Tip:** call the reusable workflow at
+> `calebsargeant/semantic-release/.github/workflows/release-runner.yaml@v1`
+> instead of the action directly to opt into a workflow-level
+> `concurrency:` lock. Same inputs; serialises runs on the same target
+> branch automatically. See [Concepts → Concurrency Safety](concepts.md#concurrency-safety).
+
 ## 1. Choose A Release Model
 
 ### Trunk-Based Development

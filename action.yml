@@ -840,10 +840,31 @@ runs:
             echo "Creating prerelease tag: ${NEW_TAG}"
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git tag "${NEW_TAG}"
             REMOTE_URL=$(git remote get-url origin)
             AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GITHUB_TOKEN}@|")
-            git push "${AUTHED_URL}" "${NEW_TAG}"
+
+            # Concurrency safety: a parallel run may have just published
+            # the same tag. Check the remote first; on push race we re-
+            # check and exit gracefully.
+            if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${NEW_TAG}" 2>/dev/null | grep -q "refs/tags/${NEW_TAG}$"; then
+              echo "::notice::Tag ${NEW_TAG} already exists on remote (parallel run won the race). Treating as no-op release."
+              echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
+              echo "released=false"        >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            git tag "${NEW_TAG}"
+            if ! git push "${AUTHED_URL}" "${NEW_TAG}" 2>/tmp/tag_push.err; then
+              if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${NEW_TAG}" 2>/dev/null | grep -q "refs/tags/${NEW_TAG}$"; then
+                echo "::notice::Tag ${NEW_TAG} now exists on remote (parallel run beat us between check and push). Skipping."
+                git tag -d "${NEW_TAG}" 2>/dev/null || true
+                echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
+                echo "released=false"        >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "::error::Failed to push tag ${NEW_TAG}: $(cat /tmp/tag_push.err 2>/dev/null | head -3)"
+              exit 1
+            fi
             if [ "${{ inputs.create-release }}" == "true" ]; then
               gh release create "${NEW_TAG}" --prerelease \
                 --title "${NEW_TAG}" \
@@ -868,10 +889,30 @@ runs:
             echo "Stable release: ${NEW_TAG} from promotion branch ${HEAD_REF}"
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git tag "${NEW_TAG}"
             REMOTE_URL=$(git remote get-url origin)
             AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GITHUB_TOKEN}@|")
-            git push "${AUTHED_URL}" "${NEW_TAG}"
+
+            # Concurrency safety: same race protection as the prerelease
+            # path above — a parallel run may have already cut this stable.
+            if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${NEW_TAG}" 2>/dev/null | grep -q "refs/tags/${NEW_TAG}$"; then
+              echo "::notice::Tag ${NEW_TAG} already exists on remote (parallel run won the race). Treating as no-op release."
+              echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
+              echo "released=false"        >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            git tag "${NEW_TAG}"
+            if ! git push "${AUTHED_URL}" "${NEW_TAG}" 2>/tmp/tag_push.err; then
+              if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${NEW_TAG}" 2>/dev/null | grep -q "refs/tags/${NEW_TAG}$"; then
+                echo "::notice::Tag ${NEW_TAG} now exists on remote (parallel run beat us). Skipping."
+                git tag -d "${NEW_TAG}" 2>/dev/null || true
+                echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
+                echo "released=false"        >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "::error::Failed to push tag ${NEW_TAG}: $(cat /tmp/tag_push.err 2>/dev/null | head -3)"
+              exit 1
+            fi
             if [ "${{ inputs.create-release }}" == "true" ]; then
               gh release create "${NEW_TAG}" \
                 --title "${NEW_TAG}" \
@@ -947,10 +988,42 @@ runs:
         echo "Creating tag: ${TAG}"
         git config user.name  "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a "${TAG}" -m "chore(release): ${TAG}"
+
         REMOTE_URL=$(git remote get-url origin)
         AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GITHUB_TOKEN}@|")
-        git push "${AUTHED_URL}" "${TAG}"
+
+        # Concurrency safety: a parallel run on the same branch may have
+        # raced us and already created this tag. Check the remote first;
+        # if the tag exists, treat it as "released" (the parallel run
+        # owns it) and skip re-publishing — otherwise tag and push,
+        # detecting the same race in the push-failure branch as a
+        # belt-and-suspenders.
+        if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${TAG}" 2>/dev/null | grep -q "refs/tags/${TAG}$"; then
+          echo "::notice::Tag ${TAG} already exists on remote — a parallel run published it. Treating this run as a no-op release."
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
+          echo "released=false"     >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        git tag -a "${TAG}" -m "chore(release): ${TAG}"
+
+        if ! git push "${AUTHED_URL}" "${TAG}" 2>/tmp/tag_push.err; then
+          # Re-check the remote — if the tag now exists, another run beat
+          # us between the ls-remote and the push. That's a clean race
+          # outcome: continue gracefully without failing the workflow.
+          if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${TAG}" 2>/dev/null | grep -q "refs/tags/${TAG}$"; then
+            echo "::notice::Tag ${TAG} now exists on remote (parallel run won the race). Skipping downstream steps."
+            git tag -d "${TAG}" 2>/dev/null || true
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
+            echo "released=false"     >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::Failed to push tag ${TAG}: $(cat /tmp/tag_push.err 2>/dev/null | head -3)"
+          exit 1
+        fi
+
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
         if [ "${{ inputs.create-release }}" == "true" ]; then
@@ -996,7 +1069,12 @@ runs:
           gitversion)
             VERSION="${{ steps.gitversion-tag.outputs.version }}"
             TAG="${{ steps.gitversion-tag.outputs.tag }}"
-            RELEASED="true"
+            # The gitversion-tag step emits released=false when it
+            # detects a parallel run beat us to publishing the same tag.
+            # Default to true for the no-conflict case so existing
+            # callers see no behaviour change.
+            RELEASED="${{ steps.gitversion-tag.outputs.released }}"
+            [ -z "${RELEASED}" ] && RELEASED="true"
             ;;
           release-please)
             if [ "${{ steps.release-please.outputs.release_created }}" == "true" ]; then
@@ -1092,23 +1170,54 @@ runs:
 
         git commit -m "chore(release): persist version ${VERSION} in $(basename "${FILE}") [skip ci]"
 
-        # Best-effort sync to avoid losing the release if the branch moved
-        # in parallel (other commits, Flux image bumps, etc.).
+        # Concurrency-safe push loop: another run on the same branch may
+        # land a commit (Flux image bump, parallel release run, etc.)
+        # between our fetch and our push. We rebase, push, and on
+        # rejection re-fetch and retry up to MAX_ATTEMPTS times with
+        # short backoff. The reusable workflow at
+        # .github/workflows/release-runner.yaml serialises runs at the
+        # workflow level via a `concurrency:` group; this loop closes
+        # the small window the lock can't cover (e.g. concurrent commits
+        # from automation outside the workflow group).
         BRANCH="${GITHUB_REF_NAME}"
-        git fetch origin "${BRANCH}"
-        if ! git rebase "origin/${BRANCH}"; then
-          echo "::warning::Could not rebase ${FILE} commit onto latest ${BRANCH}; skipping push."
-          git rebase --abort || true
-          exit 0
-        fi
-
         REMOTE_URL=$(git remote get-url origin)
         AUTHED_URL=$(echo "${REMOTE_URL}" | sed "s|https://|https://x-access-token:${GITHUB_TOKEN}@|")
-        if ! git push "${AUTHED_URL}" "HEAD:${BRANCH}"; then
-          echo "::warning::Could not push ${FILE} commit (non-fast-forward or protected branch). Continuing release."
+        MAX_ATTEMPTS=5
+
+        for attempt in $(seq 1 ${MAX_ATTEMPTS}); do
+          git fetch origin "${BRANCH}" 2>&1 | tail -3 || true
+          if ! git rebase "origin/${BRANCH}"; then
+            git rebase --abort 2>/dev/null || true
+            if [ "${attempt}" -eq "${MAX_ATTEMPTS}" ]; then
+              echo "::warning::Could not rebase ${FILE} commit onto latest ${BRANCH} after ${MAX_ATTEMPTS} attempts; skipping push."
+              exit 0
+            fi
+            sleep $((attempt * 2))
+            continue
+          fi
+
+          if git push "${AUTHED_URL}" "HEAD:${BRANCH}" 2>/tmp/push.err; then
+            echo "Pushed ${FILE} update for ${VERSION} to ${BRANCH} on attempt ${attempt}/${MAX_ATTEMPTS}."
+            exit 0
+          fi
+
+          # Common race: another run pushed between our fetch and push.
+          # Re-fetch and retry. Stop early if the failure is non-recoverable
+          # (e.g. branch protection rejection without bypass).
+          if grep -qiE "non-fast-forward|fetch first|stale" /tmp/push.err; then
+            echo "Push attempt ${attempt}/${MAX_ATTEMPTS} lost a race; will rebase + retry"
+            sleep $((attempt * 2))
+            continue
+          fi
+
+          # Anything else (auth failure, ruleset block, etc.) — don't keep
+          # banging on the door; surface it as a warning and move on so
+          # the rest of the release flow still completes.
+          echo "::warning::Could not push ${FILE} commit: $(cat /tmp/push.err | head -3). Continuing release."
           exit 0
-        fi
-        echo "Pushed ${FILE} update for ${VERSION} to ${BRANCH}."
+        done
+
+        echo "::warning::Exhausted ${MAX_ATTEMPTS} push attempts for ${FILE} on ${BRANCH}; skipping push."
 
     # ═════════════════════════════════════════════════════════════════════════
     # RELEASE MODE — Docker image promotion
