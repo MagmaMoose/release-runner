@@ -95,6 +95,31 @@ By default, release jobs use the Release Runner GitHub App.
 [Other auth modes](https://semver.calebsargeant.com/concepts/#release-write-token)
 are also supported.
 
+### Built-In Concurrency Lock
+
+Use the bundled reusable workflow instead of calling the action directly
+to get a workflow-level `concurrency:` group with no extra config —
+two simultaneous runs on the same branch will queue rather than race
+each other to the tag:
+
+```yaml
+jobs:
+  release:
+    uses: calebsargeant/semantic-release/.github/workflows/release-runner.yaml@v1
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      mode: release
+      environment: prod
+      environments: '["prod"]'
+      prerelease-identifiers: '{}'
+```
+
+Same inputs as the action. See
+[Concepts → Concurrency Safety](https://semver.calebsargeant.com/concepts/#concurrency-safety)
+for what's protected.
+
 ## Docker Image Releases
 
 Set `image_name` to build PR images in CI mode and promote or rebuild them

@@ -221,6 +221,93 @@ Both require token scopes that go beyond the Release Runner App's
 defaults — see the input documentation in
 [Action reference](reference/action-inputs-outputs.md).
 
+## Concurrency Safety
+
+Two release runs on the same branch racing each other is the single
+biggest source of "tag already exists" / "non-fast-forward" failures
+this action sees in the wild. Typical sources:
+
+- A `feat:` push to `develop` triggers a run; the version-file commit
+  the action pushes back triggers a *second* run before the first
+  finishes its Docker promotion.
+- A maintainer hits **Run workflow** while a push-triggered run is
+  still in flight.
+- For TBD-PR setups, a promotion-PR merge fires both
+  `pull_request:closed` *and* `push` — both legitimate entry points for
+  the same release event.
+
+Release Runner gives you two layers of defence:
+
+### 1. The reusable workflow wrapper (the actual lock)
+
+A composite action like Release Runner runs *inside* a job that the
+caller defines, so it can't declare workflow-level `concurrency:`
+itself. To get GitHub-enforced serialisation in a single line, call
+the bundled reusable workflow instead of the action:
+
+```yaml
+jobs:
+  release:
+    uses: calebsargeant/semantic-release/.github/workflows/release-runner.yaml@v1
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      versioning-tool: gitversion
+      deployment-model: bbd
+      branch-map: '{"develop": "dev", "master": "prod"}'
+      # ... same inputs as the direct-action call
+    secrets:
+      app-private-key: ${{ secrets.SEMANTIC_RELEASE_APP_PRIVATE_KEY }}
+```
+
+The wrapper declares:
+
+```yaml
+concurrency:
+  group: release-runner-${{ github.event.pull_request.base.ref || github.ref_name }}
+  cancel-in-progress: false
+```
+
+Group key resolution:
+
+| Trigger | Resolves to |
+|---|---|
+| Push to `develop` | `release-runner-develop` |
+| `workflow_dispatch` on `develop` | `release-runner-develop` |
+| `pull_request:closed` targeting `main` | `release-runner-main` |
+
+So a promotion-PR merge that fires both `pull_request:closed` *and*
+`push` ends up in the same group — the second event waits for the
+first to finish. `cancel-in-progress: false` is FIFO: no run is
+killed mid-tag-publish.
+
+Override via `concurrency-group` (string input) if you need a
+different key, or `cancel-in-progress: true` if you genuinely want
+later runs to win. The defaults are right for most setups.
+
+### 2. Defensive race handling in the action
+
+The reusable wrapper closes the workflow-level race; the action also
+defends itself for the case where you call it directly without the
+wrapper, or where commits land on the branch from outside the
+concurrency group (Flux image bumps, dependabot, hotfix pushes from
+another tool):
+
+- **Tag creation** (gitversion + semantic-release-npm manual paths)
+  pre-checks the remote for the target tag. If it already exists, the
+  step exits cleanly with `released=false` rather than failing the
+  workflow. A second check after a failed push catches the race
+  window between check and push.
+- **Version-file push-back** uses a 5-attempt rebase + push loop with
+  exponential backoff. Non-fast-forward rejections trigger a fresh
+  fetch + rebase; non-recoverable failures (auth errors, ruleset
+  blocks) surface as a warning and let the rest of the release flow
+  finish.
+
+When in doubt, use the reusable workflow — it's the same set of
+inputs and one less failure mode to think about.
+
 ## Release Write Token
 
 Release mode needs a token because it may write Git tags, GitHub Releases,
