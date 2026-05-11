@@ -865,13 +865,15 @@ runs:
               echo "::error::Failed to push tag ${NEW_TAG}: $(cat /tmp/tag_push.err 2>/dev/null | head -3)"
               exit 1
             fi
-            if [ "${{ inputs.create-release }}" == "true" ]; then
-              gh release create "${NEW_TAG}" --prerelease \
-                --title "${NEW_TAG}" \
-                --notes "Pre-release ${IDENTIFIER}.${PRE_NUM} for version ${NEXT_VER}"
-            fi
+            # GitHub Release is published in a later step, after image
+            # promotion, so downstream `release:published` listeners see
+            # versioned images in the registry. The custom prerelease
+            # note is threaded through outputs so the deferred publish
+            # step preserves the original message format instead of
+            # falling back to GitHub's auto-generated notes.
             echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
             echo "released=true"         >> "$GITHUB_OUTPUT"
+            echo "release_notes=Pre-release ${IDENTIFIER}.${PRE_NUM} for version ${NEXT_VER}" >> "$GITHUB_OUTPUT"
           else
             echo "No relevant commits for prerelease — skipping"
             EXISTING_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
@@ -913,11 +915,9 @@ runs:
               echo "::error::Failed to push tag ${NEW_TAG}: $(cat /tmp/tag_push.err 2>/dev/null | head -3)"
               exit 1
             fi
-            if [ "${{ inputs.create-release }}" == "true" ]; then
-              gh release create "${NEW_TAG}" \
-                --title "${NEW_TAG}" \
-                --generate-notes
-            fi
+            # GitHub Release is published in a later step, after image
+            # promotion, so downstream `release:published` listeners see
+            # versioned images in the registry.
             echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
             echo "released=true"         >> "$GITHUB_OUTPUT"
           else
@@ -1023,14 +1023,12 @@ runs:
           echo "::error::Failed to push tag ${TAG}: $(cat /tmp/tag_push.err 2>/dev/null | head -3)"
           exit 1
         fi
+        # GitHub Release is published in a later step, after image
+        # promotion, so downstream `release:published` listeners see
+        # versioned images in the registry.
 
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
-        if [ "${{ inputs.create-release }}" == "true" ]; then
-          IS_PRE_FLAG=""
-          [ "${IS_PRERELEASE}" == "true" ] && IS_PRE_FLAG="--prerelease"
-          gh release create "${TAG}" --title "${TAG}" --generate-notes ${IS_PRE_FLAG} || true
-        fi
 
     - name: Run release-please
       id: release-please
@@ -1052,6 +1050,7 @@ runs:
         VERSION=""
         RELEASED="false"
         TAG=""
+        RELEASE_NOTES=""
         case "${TOOL}" in
           semantic-release-python)
             VERSION="${{ steps.psr.outputs.version }}"
@@ -1065,6 +1064,9 @@ runs:
               VERSION="${LATEST_TAG#${PREFIX}}"
               TAG="${LATEST_TAG}"
             fi
+            # Only the prerelease branch emits release_notes; stable
+            # and promotion-PR paths fall through to --generate-notes.
+            RELEASE_NOTES="${{ steps.semrel-npm.outputs.release_notes }}"
             ;;
           gitversion)
             VERSION="${{ steps.gitversion-tag.outputs.version }}"
@@ -1094,6 +1096,7 @@ runs:
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
         echo "released=${RELEASED}" >> "$GITHUB_OUTPUT"
+        echo "release_notes=${RELEASE_NOTES}" >> "$GITHUB_OUTPUT"
         echo "Tool: ${TOOL} | Version: ${VERSION} | Tag: ${TAG} | Released: ${RELEASED}"
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -1373,6 +1376,95 @@ runs:
               --set "${TARGET}.cache-from=type=gha,scope=buildkit-${TARGET}" \
               --set "${TARGET}.cache-to=type=gha,mode=max,scope=buildkit-${TARGET}" \
               --push
+          fi
+        done
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # RELEASE MODE — Publish GitHub Release (deferred until after image promote)
+    # ═════════════════════════════════════════════════════════════════════════
+    #
+    # Why this step is here and not inline with tag creation:
+    # downstream workflows that listen for `release:published` (typical for
+    # Cloud Run / k8s / GitOps deploys) start polling GHCR for the
+    # versioned image the moment the release fires. If we publish the
+    # release first and promote the image afterwards, those listeners
+    # race the registry — they'll get "manifest unknown" / "not found"
+    # for as long as image promotion + registry-API propagation takes.
+    #
+    # Publishing the release after image promotion makes the
+    # `release:published` event a reliable readiness signal for the
+    # versioned image, so consumers don't need arbitrary retry budgets.
+    #
+    # Idempotent: paths that publish the release inside an external tool
+    # (semantic-release-npm direct push, release-please, python-semantic-
+    # release with vcs_release: true) cannot defer cleanly, so we detect
+    # the pre-existing release and emit a notice. The image-vs-release
+    # race remains for those paths until they're refactored too — track
+    # this in the action's release notes if you rely on those tools.
+
+    - name: Publish GitHub Release
+      if: |
+        inputs.mode == 'release' &&
+        inputs.create-release == 'true' &&
+        steps.normalize.outputs.released == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.auth.outputs.token }}
+      run: |
+        set -euo pipefail
+        TAG="${{ steps.normalize.outputs.tag }}"
+        if [ -z "${TAG}" ]; then
+          echo "::warning::No tag resolved by normalize step — skipping release publish."
+          exit 0
+        fi
+        if gh release view "${TAG}" >/dev/null 2>&1; then
+          echo "::notice::Release ${TAG} already exists (inner versioning tool published it before image promotion). Image-vs-release race may still apply for this tool — see action docs."
+          exit 0
+        fi
+        PRE_FLAG=""
+        if [ "${{ steps.detect-env.outputs.is_prerelease }}" == "true" ]; then
+          PRE_FLAG="--prerelease"
+        fi
+        # Preserve any per-path custom release notes the tagging step
+        # emitted (today only the semantic-release-npm prerelease block
+        # uses this, with a "Pre-release X.N for version Y" message);
+        # paths that don't emit one fall back to GitHub's auto-generated
+        # notes which include the PRs and contributors in the release
+        # range. Using an array avoids word-splitting the notes string.
+        NOTES="${{ steps.normalize.outputs.release_notes }}"
+        NOTES_FLAGS=(--generate-notes)
+        if [ -n "${NOTES}" ]; then
+          NOTES_FLAGS=(--notes "${NOTES}")
+        fi
+        # Retry the release create to absorb transient GitHub API hiccups
+        # (5xx, rate limits, propagation lag for the tag we just pushed).
+        # On persistent failure we fail the run — silently swallowing here
+        # would leave the workflow green with no GitHub Release, and any
+        # `release:published` listener (deploy / verify workflows) would
+        # never fire.
+        MAX_ATTEMPTS=5
+        for attempt in $(seq 1 ${MAX_ATTEMPTS}); do
+          if gh release create "${TAG}" \
+               --title "${TAG}" \
+               "${NOTES_FLAGS[@]}" \
+               ${PRE_FLAG} 2>/tmp/release_create.err; then
+            echo "Published GitHub Release ${TAG} on attempt ${attempt}/${MAX_ATTEMPTS}."
+            exit 0
+          fi
+          # An earlier attempt may have actually succeeded before the
+          # client errored (e.g. response timeout) — re-check before
+          # retrying, since `gh release create` is not idempotent.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::notice::Release ${TAG} now exists (created on a prior attempt or by a concurrent runner). Continuing."
+            exit 0
+          fi
+          ERR=$(head -3 /tmp/release_create.err 2>/dev/null || echo "")
+          if [ "${attempt}" -lt "${MAX_ATTEMPTS}" ]; then
+            echo "::warning::Attempt ${attempt}/${MAX_ATTEMPTS} to create Release ${TAG} failed: ${ERR}. Retrying."
+            sleep $((attempt * 5))
+          else
+            echo "::error::Failed to create GitHub Release ${TAG} after ${MAX_ATTEMPTS} attempts: ${ERR}. The tag is pushed but downstream release-event listeners will not fire — delete the tag and re-run, or create the release manually."
+            exit 1
           fi
         done
 
