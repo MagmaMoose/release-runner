@@ -172,6 +172,14 @@ on:
       gitversion-config:
         type: string
         default: 'GitVersion.yml'
+      gitversion-appsettings-file:
+        description: 'DEPRECATED — use version-file instead.'
+        type: string
+        default: ''
+      gitversion-appsettings-version-path:
+        description: 'DEPRECATED — use version-file-json-path instead.'
+        type: string
+        default: ''
       release-please-release-type:
         type: string
         default: 'simple'
@@ -284,5 +292,7 @@ jobs:
           aggregate-clickup-tickets: ${{ inputs.aggregate-clickup-tickets }}
           gitversion-spec: ${{ inputs.gitversion-spec }}
           gitversion-config: ${{ inputs.gitversion-config }}
+          gitversion-appsettings-file: ${{ inputs.gitversion-appsettings-file }}
+          gitversion-appsettings-version-path: ${{ inputs.gitversion-appsettings-version-path }}
           release-please-release-type: ${{ inputs.release-please-release-type }}
           release-please-config-file: ${{ inputs.release-please-config-file }}

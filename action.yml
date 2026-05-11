@@ -846,7 +846,7 @@ runs:
             # Concurrency safety: a parallel run may have just published
             # the same tag. Check the remote first; on push race we re-
             # check and exit gracefully.
-            if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${NEW_TAG}" 2>/dev/null | grep -q "refs/tags/${NEW_TAG}$"; then
+            if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${NEW_TAG}" 2>/dev/null | grep -Fq "refs/tags/${NEW_TAG}"; then
               echo "::notice::Tag ${NEW_TAG} already exists on remote (parallel run won the race). Treating as no-op release."
               echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
               echo "released=false"        >> "$GITHUB_OUTPUT"
@@ -855,7 +855,7 @@ runs:
 
             git tag "${NEW_TAG}"
             if ! git push "${AUTHED_URL}" "${NEW_TAG}" 2>/tmp/tag_push.err; then
-              if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${NEW_TAG}" 2>/dev/null | grep -q "refs/tags/${NEW_TAG}$"; then
+              if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${NEW_TAG}" 2>/dev/null | grep -Fq "refs/tags/${NEW_TAG}"; then
                 echo "::notice::Tag ${NEW_TAG} now exists on remote (parallel run beat us between check and push). Skipping."
                 git tag -d "${NEW_TAG}" 2>/dev/null || true
                 echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
@@ -894,7 +894,7 @@ runs:
 
             # Concurrency safety: same race protection as the prerelease
             # path above — a parallel run may have already cut this stable.
-            if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${NEW_TAG}" 2>/dev/null | grep -q "refs/tags/${NEW_TAG}$"; then
+            if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${NEW_TAG}" 2>/dev/null | grep -Fq "refs/tags/${NEW_TAG}"; then
               echo "::notice::Tag ${NEW_TAG} already exists on remote (parallel run won the race). Treating as no-op release."
               echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
               echo "released=false"        >> "$GITHUB_OUTPUT"
@@ -903,7 +903,7 @@ runs:
 
             git tag "${NEW_TAG}"
             if ! git push "${AUTHED_URL}" "${NEW_TAG}" 2>/tmp/tag_push.err; then
-              if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${NEW_TAG}" 2>/dev/null | grep -q "refs/tags/${NEW_TAG}$"; then
+              if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${NEW_TAG}" 2>/dev/null | grep -Fq "refs/tags/${NEW_TAG}"; then
                 echo "::notice::Tag ${NEW_TAG} now exists on remote (parallel run beat us). Skipping."
                 git tag -d "${NEW_TAG}" 2>/dev/null || true
                 echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
@@ -998,7 +998,7 @@ runs:
         # owns it) and skip re-publishing — otherwise tag and push,
         # detecting the same race in the push-failure branch as a
         # belt-and-suspenders.
-        if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${TAG}" 2>/dev/null | grep -q "refs/tags/${TAG}$"; then
+        if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${TAG}" 2>/dev/null | grep -Fq "refs/tags/${TAG}"; then
           echo "::notice::Tag ${TAG} already exists on remote — a parallel run published it. Treating this run as a no-op release."
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
@@ -1012,7 +1012,7 @@ runs:
           # Re-check the remote — if the tag now exists, another run beat
           # us between the ls-remote and the push. That's a clean race
           # outcome: continue gracefully without failing the workflow.
-          if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${TAG}" 2>/dev/null | grep -q "refs/tags/${TAG}$"; then
+          if git ls-remote --tags "${AUTHED_URL}" "refs/tags/${TAG}" 2>/dev/null | grep -Fq "refs/tags/${TAG}"; then
             echo "::notice::Tag ${TAG} now exists on remote (parallel run won the race). Skipping downstream steps."
             git tag -d "${TAG}" 2>/dev/null || true
             echo "version=${VERSION}" >> "$GITHUB_OUTPUT"

@@ -232,9 +232,9 @@ this action sees in the wild. Typical sources:
   finishes its Docker promotion.
 - A maintainer hits **Run workflow** while a push-triggered run is
   still in flight.
-- For TBD-PR setups, a promotion-PR merge fires both `pull_request:
-  closed` *and* `push` — both legitimate entry points for the same
-  release event.
+- For TBD-PR setups, a promotion-PR merge fires both
+  `pull_request:closed` *and* `push` — both legitimate entry points for
+  the same release event.
 
 Release Runner gives you two layers of defence:
 
