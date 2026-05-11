@@ -1416,14 +1416,37 @@ runs:
         if [ "${{ steps.detect-env.outputs.is_prerelease }}" == "true" ]; then
           PRE_FLAG="--prerelease"
         fi
-        # Best-effort: if release-create fails (e.g. transient API hiccup)
-        # the tag is already pushed, so don't fail the whole run — warn
-        # and let the user re-trigger or create the release manually.
-        gh release create "${TAG}" \
-          --title "${TAG}" \
-          --generate-notes \
-          ${PRE_FLAG} \
-        || echo "::warning::Failed to create GitHub Release ${TAG}; the tag is pushed but downstream release-event listeners will not fire."
+        # Retry the release create to absorb transient GitHub API hiccups
+        # (5xx, rate limits, propagation lag for the tag we just pushed).
+        # On persistent failure we fail the run — silently swallowing here
+        # would leave the workflow green with no GitHub Release, and any
+        # `release:published` listener (deploy / verify workflows) would
+        # never fire.
+        MAX_ATTEMPTS=5
+        for attempt in $(seq 1 ${MAX_ATTEMPTS}); do
+          if gh release create "${TAG}" \
+               --title "${TAG}" \
+               --generate-notes \
+               ${PRE_FLAG} 2>/tmp/release_create.err; then
+            echo "Published GitHub Release ${TAG} on attempt ${attempt}/${MAX_ATTEMPTS}."
+            exit 0
+          fi
+          # An earlier attempt may have actually succeeded before the
+          # client errored (e.g. response timeout) — re-check before
+          # retrying, since `gh release create` is not idempotent.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::notice::Release ${TAG} now exists (created on a prior attempt or by a concurrent runner). Continuing."
+            exit 0
+          fi
+          ERR=$(head -3 /tmp/release_create.err 2>/dev/null || echo "")
+          if [ "${attempt}" -lt "${MAX_ATTEMPTS}" ]; then
+            echo "::warning::Attempt ${attempt}/${MAX_ATTEMPTS} to create Release ${TAG} failed: ${ERR}. Retrying."
+            sleep $((attempt * 5))
+          else
+            echo "::error::Failed to create GitHub Release ${TAG} after ${MAX_ATTEMPTS} attempts: ${ERR}. The tag is pushed but downstream release-event listeners will not fire — delete the tag and re-run, or create the release manually."
+            exit 1
+          fi
+        done
 
     # ═════════════════════════════════════════════════════════════════════════
     # RELEASE MODE — Promotion PR (tbd-pr model, opt-in)
