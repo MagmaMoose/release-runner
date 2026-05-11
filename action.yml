@@ -865,11 +865,9 @@ runs:
               echo "::error::Failed to push tag ${NEW_TAG}: $(cat /tmp/tag_push.err 2>/dev/null | head -3)"
               exit 1
             fi
-            if [ "${{ inputs.create-release }}" == "true" ]; then
-              gh release create "${NEW_TAG}" --prerelease \
-                --title "${NEW_TAG}" \
-                --notes "Pre-release ${IDENTIFIER}.${PRE_NUM} for version ${NEXT_VER}"
-            fi
+            # GitHub Release is published in a later step, after image
+            # promotion, so downstream `release:published` listeners see
+            # versioned images in the registry.
             echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
             echo "released=true"         >> "$GITHUB_OUTPUT"
           else
@@ -913,11 +911,9 @@ runs:
               echo "::error::Failed to push tag ${NEW_TAG}: $(cat /tmp/tag_push.err 2>/dev/null | head -3)"
               exit 1
             fi
-            if [ "${{ inputs.create-release }}" == "true" ]; then
-              gh release create "${NEW_TAG}" \
-                --title "${NEW_TAG}" \
-                --generate-notes
-            fi
+            # GitHub Release is published in a later step, after image
+            # promotion, so downstream `release:published` listeners see
+            # versioned images in the registry.
             echo "latest_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
             echo "released=true"         >> "$GITHUB_OUTPUT"
           else
@@ -1023,14 +1019,12 @@ runs:
           echo "::error::Failed to push tag ${TAG}: $(cat /tmp/tag_push.err 2>/dev/null | head -3)"
           exit 1
         fi
+        # GitHub Release is published in a later step, after image
+        # promotion, so downstream `release:published` listeners see
+        # versioned images in the registry.
 
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
-        if [ "${{ inputs.create-release }}" == "true" ]; then
-          IS_PRE_FLAG=""
-          [ "${IS_PRERELEASE}" == "true" ] && IS_PRE_FLAG="--prerelease"
-          gh release create "${TAG}" --title "${TAG}" --generate-notes ${IS_PRE_FLAG} || true
-        fi
 
     - name: Run release-please
       id: release-please
@@ -1375,6 +1369,61 @@ runs:
               --push
           fi
         done
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # RELEASE MODE — Publish GitHub Release (deferred until after image promote)
+    # ═════════════════════════════════════════════════════════════════════════
+    #
+    # Why this step is here and not inline with tag creation:
+    # downstream workflows that listen for `release:published` (typical for
+    # Cloud Run / k8s / GitOps deploys) start polling GHCR for the
+    # versioned image the moment the release fires. If we publish the
+    # release first and promote the image afterwards, those listeners
+    # race the registry — they'll get "manifest unknown" / "not found"
+    # for as long as image promotion + registry-API propagation takes.
+    #
+    # Publishing the release after image promotion makes the
+    # `release:published` event a reliable readiness signal for the
+    # versioned image, so consumers don't need arbitrary retry budgets.
+    #
+    # Idempotent: paths that publish the release inside an external tool
+    # (semantic-release-npm direct push, release-please, python-semantic-
+    # release with vcs_release: true) cannot defer cleanly, so we detect
+    # the pre-existing release and emit a notice. The image-vs-release
+    # race remains for those paths until they're refactored too — track
+    # this in the action's release notes if you rely on those tools.
+
+    - name: Publish GitHub Release
+      if: |
+        inputs.mode == 'release' &&
+        inputs.create-release == 'true' &&
+        steps.normalize.outputs.released == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.auth.outputs.token }}
+      run: |
+        set -euo pipefail
+        TAG="${{ steps.normalize.outputs.tag }}"
+        if [ -z "${TAG}" ]; then
+          echo "::warning::No tag resolved by normalize step — skipping release publish."
+          exit 0
+        fi
+        if gh release view "${TAG}" >/dev/null 2>&1; then
+          echo "::notice::Release ${TAG} already exists (inner versioning tool published it before image promotion). Image-vs-release race may still apply for this tool — see action docs."
+          exit 0
+        fi
+        PRE_FLAG=""
+        if [ "${{ steps.detect-env.outputs.is_prerelease }}" == "true" ]; then
+          PRE_FLAG="--prerelease"
+        fi
+        # Best-effort: if release-create fails (e.g. transient API hiccup)
+        # the tag is already pushed, so don't fail the whole run — warn
+        # and let the user re-trigger or create the release manually.
+        gh release create "${TAG}" \
+          --title "${TAG}" \
+          --generate-notes \
+          ${PRE_FLAG} \
+        || echo "::warning::Failed to create GitHub Release ${TAG}; the tag is pushed but downstream release-event listeners will not fire."
 
     # ═════════════════════════════════════════════════════════════════════════
     # RELEASE MODE — Promotion PR (tbd-pr model, opt-in)
