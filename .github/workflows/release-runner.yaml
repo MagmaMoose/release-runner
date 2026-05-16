@@ -252,7 +252,7 @@ jobs:
       resolved-environment: ${{ steps.run.outputs.resolved-environment }}
     steps:
       - id: run
-        uses: magmamoose/release-runner@e88a8245037aab4f1c030852048efcdd4e54991b # v1
+        uses: magmamoose/release-runner@f4f8aa6a28207966ebfc85ab4255a014ed30cf33 # v1
         with:
           mode: ${{ inputs.mode }}
           auth-mode: ${{ inputs.auth-mode }}
